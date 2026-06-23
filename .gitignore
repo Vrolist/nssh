@@ -1,0 +1,47 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+*_bin
+
+# Output
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test reports
+go_test_module/test_reports/
+
+temp/
+nssh_client
+nssh_unified
+nssh_gui
+nssh-gui
+nssh
+*.zip
+*.rar
+*.tar.gz
+*.app
+tmp/*
+frontend/node_modules/*
+gui/frontend/node_modules/*

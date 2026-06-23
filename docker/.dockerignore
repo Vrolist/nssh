@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+.gitea
+
+# 文档（容器不需要）
+doc/
+todo/
+README.md
+*.md
+
+# GUI 前端（容器不需要）
+gui/
+
+# 测试
+scripts_test/
+go_test_module/
+enterprise_inquire/
+
+# SDK（容器不需要）
+sdk/
+
+# 构建脚本
+build.sh
+build_all.sh
+build_gui.sh
+*.sh
+
+# 本地临时文件
+bin/
+*.log
