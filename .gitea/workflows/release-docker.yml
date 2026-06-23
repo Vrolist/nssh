@@ -30,11 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Configure git credentials
-        run: |
-          git config --global url."http://buladou:${{ secrets.GTEA_TOKEN }}@192.168.2.27/".insteadOf "http://192.168.2.27/"
-
-      - uses: http://192.168.2.27/buladou/checkout@v4
+      - uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
         run: |
@@ -57,11 +53,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Configure git credentials
-        run: |
-          git config --global url."http://buladou:${{ secrets.GTEA_TOKEN }}@192.168.2.27/".insteadOf "http://192.168.2.27/"
-
-      - uses: http://192.168.2.27/buladou/checkout@v4
+      - uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
         run: |
