@@ -196,5 +196,5 @@ jobs:
         run: |
           GH_REPO_CLEAN="${GH_REPO#https://}"
           git remote add github "https://x-access-token:${GH_TOKEN}@${GH_REPO_CLEAN}"
-          git push github HEAD:main --force
+          git push github HEAD:refs/heads/main --force
           git push github --tags --force

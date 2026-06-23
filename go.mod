@@ -1,6 +1,6 @@
 module github.com/Vrolist/nssh
 
-go 1.22
+go 1.20
 
 require (
 	github.com/Vrolist/nssh/base_core v0.0.0
