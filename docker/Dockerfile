@@ -2,7 +2,7 @@
 # Stage 1: Build - 编译静态二进制
 # =====================================================
 # BASE_REGISTRY 为空时使用官方镜像，构建时可通过 --build-arg 注入内网地址
-# 例如: --build-arg BASE_REGISTRY=192.168.2.88:80/library/
+# 例如: --build-arg BASE_REGISTRY=192.168.2.88:443/library/
 ARG BASE_REGISTRY=
 FROM ${BASE_REGISTRY}golang:1.20-alpine AS builder
 
