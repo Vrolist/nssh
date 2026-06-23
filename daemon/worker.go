@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"nssh/base_core"
+	"github.com/Vrolist/nssh/base_core"
 )
 
 const (

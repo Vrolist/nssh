@@ -1,10 +1,10 @@
-module nssh/base_tunnel
+module github.com/Vrolist/nssh/base_tunnel
 
 go 1.20
 
 require (
+	github.com/Vrolist/nssh/base_core v0.0.0
 	golang.org/x/crypto v0.17.0
-	nssh/base_core v0.0.0
 )
 
 require (
@@ -14,4 +14,4 @@ require (
 	golang.org/x/sys v0.15.0 // indirect
 )
 
-replace nssh_client/base_core => ../base_core
+replace github.com/Vrolist/nssh/base_core => ../base_core

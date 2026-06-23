@@ -18,10 +18,10 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"nssh/base_core"
-	"nssh/base_tunnel"
-	"nssh/daemon"
-	"nssh/platform"
+	"github.com/Vrolist/nssh/base_core"
+	"github.com/Vrolist/nssh/base_tunnel"
+	"github.com/Vrolist/nssh/daemon"
+	"github.com/Vrolist/nssh/platform"
 )
 
 var (

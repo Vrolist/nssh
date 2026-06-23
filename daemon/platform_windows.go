@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"nssh/base_core"
+	"github.com/Vrolist/nssh/base_core"
 )
 
 func init() {

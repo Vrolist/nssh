@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"nssh/base_core"
+	"github.com/Vrolist/nssh/base_core"
 )
 
 var lokiURL string

@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"nssh/base_core"
+	"github.com/Vrolist/nssh/base_core"
 )
 
 const copyBufferSize = 128 * 1024

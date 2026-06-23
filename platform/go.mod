@@ -1,4 +1,4 @@
-module nssh/platform
+module github.com/Vrolist/nssh/platform
 
 go 1.20
 

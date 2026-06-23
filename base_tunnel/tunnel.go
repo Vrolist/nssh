@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"nssh/base_core"
+	"github.com/Vrolist/nssh/base_core"
 )
 
 type sshForwardedTcpIP struct {

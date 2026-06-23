@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"nssh/base_core"
-	"nssh/base_tunnel"
+	"github.com/Vrolist/nssh/base_core"
+	"github.com/Vrolist/nssh/base_tunnel"
 )
 
 // setupSignals 设置信号处理，在 platform_unix.go 和 platform_windows.go 中实现

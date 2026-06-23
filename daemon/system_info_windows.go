@@ -14,7 +14,7 @@ import (
 	"time"
 	"unsafe"
 
-	"nssh/base_core"
+	"github.com/Vrolist/nssh/base_core"
 	"golang.org/x/sys/windows"
 )
 
