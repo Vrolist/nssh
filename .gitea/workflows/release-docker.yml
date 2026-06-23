@@ -20,6 +20,7 @@ env:
   # HARBOR_PROJECT: Harbor 项目名
   # HARBOR_USER: Harbor 登录用户名
   # HARBOR_PASSWORD: Harbor 登录密码
+  # GTEA_TOKEN: Gitea Access Token（用于 clone 代码）
   REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
   PROJECT: ${{ secrets.HARBOR_PROJECT }}
   IMAGE_NAME: nssh
@@ -29,6 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Configure git credentials
+        run: |
+          git config --global url."http://buladou:${{ secrets.GTEA_TOKEN }}@192.168.2.27/".insteadOf "http://192.168.2.27/"
+
       - uses: http://192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
@@ -52,6 +57,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Configure git credentials
+        run: |
+          git config --global url."http://buladou:${{ secrets.GTEA_TOKEN }}@192.168.2.27/".insteadOf "http://192.168.2.27/"
+
       - uses: http://192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
