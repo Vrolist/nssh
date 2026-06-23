@@ -49,7 +49,7 @@ jobs:
 
   build:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: go-linux
     timeout-minutes: 15
 
     strategy:
@@ -80,33 +80,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
-
-      - name: Setup Go
         run: |
-          which go || {
-            GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
-            MIRRORS=(
-              "http://192.168.2.36/${GO_TARBALL}"
-              "https://golang.google.cn/dl/${GO_TARBALL}"
-            )
-            for MIRROR in "${MIRRORS[@]}"; do
-              if curl -fsSL --connect-timeout 30 --max-time 300 "$MIRROR" -o "/tmp/${GO_TARBALL}"; then
-                break
-              fi
-              echo "Mirror failed: $MIRROR"
-            done
-            if [ -f "/tmp/${GO_TARBALL}" ]; then
-              tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
-              echo "/usr/local/go/bin" >> $GITHUB_PATH
-              export PATH="/usr/local/go/bin:$PATH"
-            else
-              echo "Error: Failed to download Go from all mirrors"
-              exit 1
-            fi
-          }
-          go version
+          git clone --depth 1 "http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/${GITHUB_REPOSITORY}.git" .
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            git fetch --depth 1 origin tag "${TAG}"
+            git checkout "${TAG}"
+          fi
+
+      - name: Setup Go environment
+        run: |
           go env -w GOPROXY=${GOPROXY}
+          go version
 
       - name: Get version info
         id: version
