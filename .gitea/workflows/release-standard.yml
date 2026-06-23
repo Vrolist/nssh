@@ -6,8 +6,7 @@ on:
       - 'v*'
 
 env:
-  GO_VERSION: "1.22.0"
-  GO_DOWNLOAD_URL: "http://192.168.2.36"
+  GO_VERSION: "1.24.12"
   GOPROXY: "https://goproxy.cn,direct"
 
 jobs:
@@ -19,12 +18,27 @@ jobs:
 
       - name: Setup Go
         run: |
-          curl -ksSL "${GO_DOWNLOAD_URL}/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
-          tar -C /usr/local -xzf /tmp/go.tar.gz
-          echo "/usr/local/go/bin" >> $GITHUB_PATH
-          export PATH="/usr/local/go/bin:$PATH"
-          go version
-          go env -w GOPROXY=${GOPROXY}
+          GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+          MIRRORS=(
+            "http://192.168.2.36/${GO_TARBALL}"
+            "https://golang.google.cn/dl/${GO_TARBALL}"
+          )
+          for MIRROR in "${MIRRORS[@]}"; do
+            if curl -fsSL --connect-timeout 30 --max-time 300 "$MIRROR" -o "/tmp/${GO_TARBALL}"; then
+              break
+            fi
+            echo "Mirror failed: $MIRROR"
+          done
+          if [ -f "/tmp/${GO_TARBALL}" ]; then
+            tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
+            echo "/usr/local/go/bin" >> $GITHUB_PATH
+            export PATH="/usr/local/go/bin:$PATH"
+            go version
+            go env -w GOPROXY=${GOPROXY}
+          else
+            echo "Error: Failed to download Go from all mirrors"
+            exit 1
+          fi
 
       - name: Run tests
         run: |
@@ -69,10 +83,25 @@ jobs:
       - name: Setup Go
         run: |
           which go || {
-            curl -ksSL "${GO_DOWNLOAD_URL}/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
-            tar -C /usr/local -xzf /tmp/go.tar.gz
-            echo "/usr/local/go/bin" >> $GITHUB_PATH
-            export PATH="/usr/local/go/bin:$PATH"
+            GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+            MIRRORS=(
+              "http://192.168.2.36/${GO_TARBALL}"
+              "https://golang.google.cn/dl/${GO_TARBALL}"
+            )
+            for MIRROR in "${MIRRORS[@]}"; do
+              if curl -fsSL --connect-timeout 30 --max-time 300 "$MIRROR" -o "/tmp/${GO_TARBALL}"; then
+                break
+              fi
+              echo "Mirror failed: $MIRROR"
+            done
+            if [ -f "/tmp/${GO_TARBALL}" ]; then
+              tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
+              echo "/usr/local/go/bin" >> $GITHUB_PATH
+              export PATH="/usr/local/go/bin:$PATH"
+            else
+              echo "Error: Failed to download Go from all mirrors"
+              exit 1
+            fi
           }
           go version
           go env -w GOPROXY=${GOPROXY}
