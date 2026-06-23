@@ -1,0 +1,103 @@
+name: Release Standard Platforms
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+
+      - name: Run tests
+        run: |
+          GOTOOLCHAIN=local go test -C base_core ./...
+          GOTOOLCHAIN=local go test -C base_tunnel ./...
+          GOTOOLCHAIN=local go test -C daemon ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            label: linux-amd64
+          - goos: linux
+            goarch: arm64
+            label: linux-arm64
+          - goos: darwin
+            goarch: amd64
+            label: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            label: darwin-arm64
+          - goos: freebsd
+            goarch: amd64
+            label: freebsd-amd64
+          - goos: freebsd
+            goarch: 386
+            label: freebsd-386
+          - goos: freebsd
+            goarch: arm64
+            label: freebsd-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+
+      - name: Get version info
+        id: version
+        run: |
+          echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          echo "COMMIT_ID=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          COMMIT_ID: ${{ steps.version.outputs.COMMIT_ID }}
+        run: |
+          OUTPUT="nssh_${GOOS}_${GOARCH}"
+          [ "${GOOS}" = "windows" ] && OUTPUT="${OUTPUT}.exe"
+          go build -ldflags="-s -w -X main.Version=${VERSION} -X main.CommitID=${COMMIT_ID}" \
+            -trimpath -o "${OUTPUT}" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nssh-${{ matrix.label }}
+          path: nssh_*
+
+  release:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

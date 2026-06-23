@@ -1,0 +1,59 @@
+name: Release Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nssh
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+
+      - name: Run tests
+        run: |
+          GOTOOLCHAIN=local go test -C base_core ./...
+          GOTOOLCHAIN=local go test -C base_tunnel ./...
+          GOTOOLCHAIN=local go test -C daemon ./...
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "IMAGE=${REGISTRY}/${{ github.repository }}/${IMAGE_NAME}:${VERSION}" >> $GITHUB_ENV
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${IMAGE_NAME}:${{ env.VERSION }}
+          build-args: |
+            VERSION=${{ env.VERSION }}

@@ -1,0 +1,26 @@
+name: CI Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+
+      - name: Run tests
+        run: |
+          go test -C base_core ./...
+          go test -C base_tunnel ./...
+          go test -C daemon ./...
