@@ -24,14 +24,15 @@ jobs:
           go env -w GOPROXY=https://goproxy.cn,direct
           go env -w GOSUMDB=sum.golang.google.cn
 
-      - name: Run base_core tests
-        run: go test ./...
-        working-directory: base_core
+      - name: Debug workspace
+        run: |
+          pwd
+          ls -la
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
 
-      - name: Run base_tunnel tests
-        run: go test ./...
-        working-directory: base_tunnel
-
-      - name: Run daemon tests
-        run: go test ./...
-        working-directory: daemon
+      - name: Run tests
+        run: |
+          ls -la base_core/
+          go test -C base_core ./...
+          go test -C base_tunnel ./...
+          go test -C daemon ./...
