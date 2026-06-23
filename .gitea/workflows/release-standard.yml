@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+
       - name: Setup Go
         run: |
           GO_VERSION="1.22.0"
@@ -19,6 +21,7 @@ jobs:
           export PATH="/usr/local/go/bin:$PATH"
           go version
           go env -w GOPROXY=https://goproxy.cn,direct
+
       - name: Run tests
         run: |
           go test -C base_core ./...
@@ -57,6 +60,8 @@ jobs:
             label: freebsd-arm64
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Setup Go
         run: |
           GO_VERSION="1.22.0"
@@ -101,6 +106,10 @@ jobs:
     if: success() && startsWith(github.ref, 'refs/tags/')
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       # 请先在 Gitea 仓库 Settings → Actions Secrets 中配置：
       # GH_TOKEN: GitHub Personal Access Token（public_repo 权限）
       # GH_REPO: GitHub 仓库路径，如 github.com/Vrolist/nssh.git
