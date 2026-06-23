@@ -157,5 +157,5 @@ jobs:
           GH_REPO: ${{ secrets.GH_REPO }}
         run: |
           git remote add github "https://x-access-token:${GH_TOKEN}@${GH_REPO}"
-          git push github main --force
+          git push github HEAD:main --force
           git push github --tags --force

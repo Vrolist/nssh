@@ -44,6 +44,7 @@ RUN if [ "$VERSION" = "dev" ]; then \
 # =====================================================
 # Stage 2: Runtime - 最小运行环境
 # =====================================================
+ARG BASE_REGISTRY=
 FROM ${BASE_REGISTRY}alpine:3.18
 
 # ca-certificates: TLS 证书，tzdata: 时区
