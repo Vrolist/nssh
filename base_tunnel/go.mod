@@ -1,10 +1,10 @@
-module nssh_client/base_tunnel
+module nssh/base_tunnel
 
 go 1.20
 
 require (
 	golang.org/x/crypto v0.17.0
-	nssh_client/base_core v0.0.0
+	nssh/base_core v0.0.0
 )
 
 require (

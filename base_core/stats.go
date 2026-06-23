@@ -235,7 +235,7 @@ func (sm *StatsManager) pushToLoki(s *Stats) {
 	lokiData := map[string]interface{}{
 		"streams": []map[string]interface{}{
 			{
-				"stream": map[string]string{"job": "nssh_client"},
+				"stream": map[string]string{"job": "nssh"},
 				"values": [][]string{{fmt.Sprintf("%d", timestamp), string(data)}},
 			},
 		},

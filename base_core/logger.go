@@ -119,7 +119,7 @@ type CustomLogger struct {
 func NewCustomLogger(output io.Writer) *CustomLogger {
 	l := &CustomLogger{
 		output:     output,
-		lokiJob:    "nssh_client",
+		lokiJob:    "nssh",
 		enableLoki: false,
 		lokiChan:  make(chan struct{}, 2),
 		stopChan:  make(chan struct{}),

@@ -1,0 +1,28 @@
+name: CI Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Setup Go
+        run: |
+          GO_VERSION="1.22.0"
+          curl -sL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+          sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+          export PATH="/usr/local/go/bin:$PATH"
+          go version
+          go env -w GOPROXY=https://goproxy.cn,direct
+          go env -w GOSUMDB=sum.golang.google.cn
+
+      - name: Run tests
+        run: go test ./...

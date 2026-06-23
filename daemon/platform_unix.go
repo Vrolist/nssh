@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"nssh_client/base_core"
+	"nssh/base_core"
 )
 
 func getSocketPath() string {

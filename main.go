@@ -18,10 +18,10 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"nssh_client/base_core"
-	"nssh_client/base_tunnel"
-	"nssh_client/daemon"
-	"nssh_client/platform"
+	"nssh/base_core"
+	"nssh/base_tunnel"
+	"nssh/daemon"
+	"nssh/platform"
 )
 
 var (
@@ -161,7 +161,7 @@ func main() {
 	}
 
 	if *versionCmd {
-		fmt.Printf("nssh_client version: %s\n", Version)
+		fmt.Printf("nssh version: %s\n", Version)
 		fmt.Printf("commit: %s\n", CommitID)
 		os.Exit(0)
 	}

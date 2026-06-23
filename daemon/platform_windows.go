@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"nssh_client/base_core"
+	"nssh/base_core"
 )
 
 func init() {

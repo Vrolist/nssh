@@ -1,4 +1,4 @@
-module nssh_client/base_core
+module nssh/base_core
 
 go 1.20
 

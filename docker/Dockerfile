@@ -1,7 +1,8 @@
 # =====================================================
 # Stage 1: Build - 编译静态二进制
 # =====================================================
-FROM golang:1.20-alpine AS builder
+ARG BASE_REGISTRY=192.168.2.88:80/library
+FROM ${BASE_REGISTRY}/golang:1.20-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -39,23 +40,23 @@ RUN if [ "$VERSION" = "dev" ]; then \
 # =====================================================
 # Stage 2: Runtime - 最小运行环境
 # =====================================================
-FROM alpine:3.18
+FROM ${BASE_REGISTRY}/alpine:3.18
 
 # ca-certificates: TLS 证书，tzdata: 时区
 # 使用清华镜像加速 Alpine 包下载
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/repositories && \
     apk add --no-cache ca-certificates tzdata && \
-    addgroup -S nssh && \
-    adduser -S -D -H -s /bin/false -G nssh nssh
+    addgroup -S nwy && \
+    adduser -S -D -H -s /bin/false -G nwy nwy
 
 COPY --from=builder /nssh /usr/local/bin/nssh
 COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh && \
-    mkdir -p /home/nssh/.nssh && \
-    chown -R nssh:nssh /home/nssh
+    mkdir -p /home/nwy/.nssh && \
+    chown -R nwy:nwy /home/nwy
 
-USER nssh
+USER nwy
 WORKDIR /tmp
 
 ENTRYPOINT ["/entrypoint.sh"]

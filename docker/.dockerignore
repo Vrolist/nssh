@@ -9,8 +9,6 @@ todo/
 README.md
 *.md
 
-# GUI 前端（容器不需要）
-gui/
 
 # 测试
 scripts_test/

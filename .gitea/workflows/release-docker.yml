@@ -1,0 +1,90 @@
+name: Release Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Docker image version (e.g., 1.2.3)'
+        required: false
+        default: ''
+
+env:
+  # 请在 Gitea 仓库 Settings → Actions Secrets 中配置：
+  # HARBOR_REGISTRY: Harbor 地址
+  # HARBOR_PROJECT: Harbor 项目名
+  # HARBOR_USER: Harbor 登录用户名
+  # HARBOR_PASSWORD: Harbor 登录密码
+  REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+  PROJECT: ${{ secrets.HARBOR_PROJECT }}
+  IMAGE_NAME: nssh
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Setup Go
+        run: |
+          GO_VERSION="1.22.0"
+          curl -sL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+          sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+          export PATH="/usr/local/go/bin:$PATH"
+          go version
+          go env -w GOPROXY=https://goproxy.cn,direct
+      - name: Run tests
+        run: go test ./...
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Setup Go
+        run: |
+          GO_VERSION="1.22.0"
+          which go || {
+            curl -sL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+            sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+            echo "/usr/local/go/bin" >> $GITHUB_PATH
+            export PATH="/usr/local/go/bin:$PATH"
+          }
+          go version
+          go env -w GOPROXY=https://goproxy.cn,direct
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="dev-$(date +%Y%m%d%H%M%S)"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Build Docker image
+        run: |
+          IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}"
+          DOCKER_BUILDKIT=0 docker build \
+            --build-arg VERSION=${VERSION} \
+            -f docker/Dockerfile \
+            -t ${IMAGE}:${VERSION} \
+            -t ${IMAGE}:latest \
+            .
+
+      - name: Login to Harbor
+        run: |
+          echo "${{ secrets.HARBOR_PASSWORD }}" | docker login ${REGISTRY} \
+            -u "${{ secrets.HARBOR_USER }}" --password-stdin
+
+      - name: Push Docker image
+        run: |
+          IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}"
+          docker push ${IMAGE}:${VERSION}
+          docker push ${IMAGE}:latest

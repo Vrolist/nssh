@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"nssh_client/base_core"
+	"nssh/base_core"
 )
 
 const (

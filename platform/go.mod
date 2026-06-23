@@ -1,4 +1,4 @@
-module nssh_client/platform
+module nssh/platform
 
 go 1.20
 

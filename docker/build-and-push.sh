@@ -2,7 +2,7 @@
 set -e
 
 # =====================================================
-# nssh_client Docker 镜像构建推送脚本
+# nssh Docker 镜像构建推送脚本
 # 用法：
 #   ./docker/build-and-push.sh [版本号]
 #

@@ -16,12 +16,16 @@ import (
 	"sync"
 	"time"
 
-	"nssh_client/base_core"
+	"nssh/base_core"
 )
 
-const (
-	lokiURL = ""
-)
+var lokiURL string
+
+// SetLokiURL 设置监控推送地址。
+// 开源版默认空字符串（不推送），企业版可调用此接口接入自家 Loki 服务。
+func SetLokiURL(url string) {
+	lokiURL = url
+}
 
 var lokiBufferPool = sync.Pool{
 	New: func() interface{} {
@@ -191,6 +195,10 @@ func formatDuration(d time.Duration) string {
 }
 
 func PushMonitorReport(report *MonitorReport) error {
+	if lokiURL == "" {
+		return nil
+	}
+
 	buf := lokiBufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		buf.Reset()
@@ -204,7 +212,7 @@ func PushMonitorReport(report *MonitorReport) error {
 
 	timestamp := time.Now().UnixNano()
 	stream := map[string]string{
-		"job":          "nssh_client",
+		"job":          "nssh",
 		"process_type": "daemon",
 		"report_type":  "monitor",
 	}
