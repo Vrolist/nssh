@@ -93,14 +93,12 @@ jobs:
       - name: Build Docker image
         run: |
           IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}"
-          LATEST_TAG="${IMAGE}:latest"
-          echo "Building ${IMAGE}:${VERSION} and ${LATEST_TAG} ..."
+          echo "Building ${IMAGE}:${VERSION} ..."
           DOCKER_BUILDKIT=0 docker build \
             --build-arg BASE_REGISTRY="192.168.2.88:80/library/" \
             --build-arg VERSION=${VERSION} \
             -f docker/Dockerfile \
             -t ${IMAGE}:${VERSION} \
-            -t ${LATEST_TAG} \
             .
           echo "Build complete"
 
@@ -113,5 +111,4 @@ jobs:
         run: |
           IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}"
           docker push ${IMAGE}:${VERSION}
-          docker push ${IMAGE}:latest
           echo "Push complete"
