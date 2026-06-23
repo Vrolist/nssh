@@ -1,8 +1,10 @@
 # =====================================================
 # Stage 1: Build - 编译静态二进制
 # =====================================================
-ARG BASE_REGISTRY=golang
-FROM ${BASE_REGISTRY}:1.22-alpine AS builder
+# BASE_REGISTRY 为空时使用官方镜像，构建时可通过 --build-arg 注入内网地址
+# 例如: --build-arg BASE_REGISTRY=192.168.2.88:80/library/
+ARG BASE_REGISTRY=
+FROM ${BASE_REGISTRY}golang:1.24-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -42,7 +44,7 @@ RUN if [ "$VERSION" = "dev" ]; then \
 # =====================================================
 # Stage 2: Runtime - 最小运行环境
 # =====================================================
-FROM alpine:3.18
+FROM ${BASE_REGISTRY}alpine:3.18
 
 # ca-certificates: TLS 证书，tzdata: 时区
 # 使用清华镜像加速 Alpine 包下载
