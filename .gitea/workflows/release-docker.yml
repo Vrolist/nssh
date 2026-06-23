@@ -96,7 +96,7 @@ jobs:
           LATEST_TAG="${IMAGE}:latest"
           echo "Building ${IMAGE}:${VERSION} and ${LATEST_TAG} ..."
           DOCKER_BUILDKIT=0 docker build \
-            --build-arg BASE_REGISTRY="192.168.2.88:443/library/" \
+            --build-arg BASE_REGISTRY="192.168.2.88:80/library/" \
             --build-arg VERSION=${VERSION} \
             -f docker/Dockerfile \
             -t ${IMAGE}:${VERSION} \
