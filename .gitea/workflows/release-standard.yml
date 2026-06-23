@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: http://192.168.2.27:1022/buladou/checkout@v4
+      - uses: http://192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
         run: |
@@ -64,7 +64,7 @@ jobs:
             label: freebsd-arm64
 
     steps:
-      - uses: http://192.168.2.27:1022/buladou/checkout@v4
+      - uses: http://192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
         run: |
@@ -112,7 +112,7 @@ jobs:
     if: success() && startsWith(github.ref, 'refs/tags/')
 
     steps:
-      - uses: http://192.168.2.27:1022/buladou/checkout@v4
+      - uses: http://192.168.2.27/buladou/checkout@v4
         with:
           fetch-depth: 0
 

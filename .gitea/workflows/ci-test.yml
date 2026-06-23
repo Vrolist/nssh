@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: http://192.168.2.27:1022/buladou/checkout@v4
+      - uses: http://192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
         run: |
