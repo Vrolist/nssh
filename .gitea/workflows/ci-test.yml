@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  GO_VERSION: "1.22.0"
+  GO_DOWNLOAD_URL: "http://192.168.2.36"
+  GOPROXY: "https://goproxy.cn,direct"
+  GOSUMDB: "sum.golang.google.cn"
+
 jobs:
   test:
     name: Run Tests
@@ -13,18 +19,17 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: http://192.168.2.27:1022/buladou/checkout@v4
 
       - name: Setup Go
         run: |
-          GO_VERSION="1.22.0"
-          curl -ksSL "https://golang.google.cn/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+          curl -ksSL "${GO_DOWNLOAD_URL}/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
           tar -C /usr/local -xzf /tmp/go.tar.gz
           echo "/usr/local/go/bin" >> $GITHUB_PATH
           export PATH="/usr/local/go/bin:$PATH"
           go version
-          go env -w GOPROXY=https://goproxy.cn,direct
-          go env -w GOSUMDB=sum.golang.google.cn
+          go env -w GOPROXY=${GOPROXY}
+          go env -w GOSUMDB=${GOSUMDB}
 
       - name: Run tests
         run: |

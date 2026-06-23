@@ -12,6 +12,9 @@ on:
         default: ''
 
 env:
+  GO_VERSION: "1.22.0"
+  GO_DOWNLOAD_URL: "http://192.168.2.36"
+  GOPROXY: "https://goproxy.cn,direct"
   # 请在 Gitea 仓库 Settings → Actions Secrets 中配置：
   # HARBOR_REGISTRY: Harbor 地址
   # HARBOR_PROJECT: Harbor 项目名
@@ -26,17 +29,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: http://192.168.2.27:1022/buladou/checkout@v4
 
       - name: Setup Go
         run: |
-          GO_VERSION="1.22.0"
-          curl -ksSL "https://golang.google.cn/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+          curl -ksSL "${GO_DOWNLOAD_URL}/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
           tar -C /usr/local -xzf /tmp/go.tar.gz
           echo "/usr/local/go/bin" >> $GITHUB_PATH
           export PATH="/usr/local/go/bin:$PATH"
           go version
-          go env -w GOPROXY=https://goproxy.cn,direct
+          go env -w GOPROXY=${GOPROXY}
 
       - name: Run tests
         run: |
@@ -50,19 +52,18 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: http://192.168.2.27:1022/buladou/checkout@v4
 
       - name: Setup Go
         run: |
-          GO_VERSION="1.22.0"
           which go || {
-            curl -ksSL "https://golang.google.cn/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+            curl -ksSL "${GO_DOWNLOAD_URL}/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
             tar -C /usr/local -xzf /tmp/go.tar.gz
             echo "/usr/local/go/bin" >> $GITHUB_PATH
             export PATH="/usr/local/go/bin:$PATH"
           }
           go version
-          go env -w GOPROXY=https://goproxy.cn,direct
+          go env -w GOPROXY=${GOPROXY}
 
       - name: Extract version
         id: version
