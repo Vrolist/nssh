@@ -36,7 +36,10 @@ jobs:
           go version
           go env -w GOPROXY=https://goproxy.cn,direct
       - name: Run tests
-        run: go test ./...
+        run: |
+          (cd base_core && go test ./...)
+          (cd base_tunnel && go test ./...)
+          (cd daemon && go test ./...)
 
   build-and-push:
     needs: test

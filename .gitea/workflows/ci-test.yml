@@ -25,4 +25,7 @@ jobs:
           go env -w GOSUMDB=sum.golang.google.cn
 
       - name: Run tests
-        run: go test ./...
+        run: |
+          (cd base_core && go test ./...)
+          (cd base_tunnel && go test ./...)
+          (cd daemon && go test ./...)
