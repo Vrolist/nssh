@@ -29,7 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
+      - name: Checkout code
+        uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
         run: |
@@ -67,7 +68,8 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
+      - name: Checkout code
+        uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
 
       - name: Setup Go
         run: |
