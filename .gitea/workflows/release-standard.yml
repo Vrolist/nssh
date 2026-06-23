@@ -124,11 +124,49 @@ jobs:
           GOTOOLCHAIN: local
           VERSION: ${{ steps.version.outputs.VERSION }}
           COMMIT_ID: ${{ steps.version.outputs.COMMIT_ID }}
+          LABEL: ${{ matrix.label }}
         run: |
           OUTPUT="nssh_${GOOS}_${GOARCH}"
           [ "${GOOS}" = "windows" ] && OUTPUT="${OUTPUT}.exe"
           go build -ldflags="-s -w -X main.Version=${VERSION} -X main.CommitID=${COMMIT_ID}" \
             -trimpath -o "${OUTPUT}" .
+
+      - name: Upload to MinIO
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          LABEL: ${{ matrix.label }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          if [ -z "${MINIO_ENDPOINT}" ] || [ -z "${MINIO_ACCESS_KEY}" ]; then
+            echo "MinIO not configured, skipping upload"
+            exit 0
+          fi
+
+          FILENAME="nssh_${GOOS}_${GOARCH}"
+          [ "${GOOS}" = "windows" ] && FILENAME="${FILENAME}.exe"
+
+          if [ ! -f "${FILENAME}" ]; then
+            echo "Binary ${FILENAME} not found, skipping"
+            exit 0
+          fi
+
+          if ! command -v mc >/dev/null 2>&1; then
+            echo "Installing mc client..."
+            curl -sL "http://dl.minio.org.cn/client/mc/release/linux-amd64/mc" -o /tmp/mc && chmod +x /tmp/mc
+            export PATH="/tmp:$PATH"
+          fi
+
+          mc alias set minio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
+          mc mb "minio/${MINIO_BUCKET}" 2>&1 || true
+
+          TARGET_PATH="${VERSION}/${LABEL}/${FILENAME}"
+          mc cp "${FILENAME}" "minio/${MINIO_BUCKET}/${TARGET_PATH}"
+          echo "Uploaded ${FILENAME} to MinIO: ${MINIO_BUCKET}/${TARGET_PATH}"
 
       - name: Archive artifacts
         run: |
@@ -156,6 +194,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ secrets.GH_REPO }}
         run: |
-          git remote add github "https://x-access-token:${GH_TOKEN}@${GH_REPO}"
+          GH_REPO_CLEAN="${GH_REPO#https://}"
+          git remote add github "https://x-access-token:${GH_TOKEN}@${GH_REPO_CLEAN}"
           git push github HEAD:main --force
           git push github --tags --force
