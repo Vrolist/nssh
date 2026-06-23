@@ -40,9 +40,9 @@ jobs:
 
       - name: Run tests
         run: |
-          go test -C base_core ./...
-          go test -C base_tunnel ./...
-          go test -C daemon ./...
+          GOTOOLCHAIN=local go test -C base_core ./...
+          GOTOOLCHAIN=local go test -C base_tunnel ./...
+          GOTOOLCHAIN=local go test -C daemon ./...
 
   build-and-push:
     needs: test
@@ -77,6 +77,8 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Build Docker image
+        env:
+          GOTOOLCHAIN: local
         run: |
           IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}"
           DOCKER_BUILDKIT=0 docker build \

@@ -24,9 +24,9 @@ jobs:
 
       - name: Run tests
         run: |
-          go test -C base_core ./...
-          go test -C base_tunnel ./...
-          go test -C daemon ./...
+          GOTOOLCHAIN=local go test -C base_core ./...
+          GOTOOLCHAIN=local go test -C base_tunnel ./...
+          GOTOOLCHAIN=local go test -C daemon ./...
 
   build:
     needs: test
@@ -76,6 +76,8 @@ jobs:
 
       - name: Get version info
         id: version
+        env:
+          GOTOOLCHAIN: local
         run: |
           echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           echo "COMMIT_ID=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
@@ -85,6 +87,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
+          GOTOOLCHAIN: local
           VERSION: ${{ steps.version.outputs.VERSION }}
           COMMIT_ID: ${{ steps.version.outputs.COMMIT_ID }}
         run: |

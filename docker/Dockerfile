@@ -8,6 +8,8 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG VERSION=dev
 
+ENV GOTOOLCHAIN=local
+
 WORKDIR /src
 
 # 复制依赖文件（利用 Docker 层缓存）
