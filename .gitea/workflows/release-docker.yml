@@ -29,17 +29,23 @@ jobs:
       - name: Setup Go
         run: |
           GO_VERSION="1.22.0"
-          curl -ksSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+          curl -ksSL "https://golang.google.cn/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
           tar -C /usr/local -xzf /tmp/go.tar.gz
           echo "/usr/local/go/bin" >> $GITHUB_PATH
           export PATH="/usr/local/go/bin:$PATH"
           go version
           go env -w GOPROXY=https://goproxy.cn,direct
-      - name: Run tests
-        run: |
-          (cd base_core && go test ./...)
-          (cd base_tunnel && go test ./...)
-          (cd daemon && go test ./...)
+      - name: Run base_core tests
+        run: go test ./...
+        working-directory: base_core
+
+      - name: Run base_tunnel tests
+        run: go test ./...
+        working-directory: base_tunnel
+
+      - name: Run daemon tests
+        run: go test ./...
+        working-directory: daemon
 
   build-and-push:
     needs: test
@@ -51,7 +57,7 @@ jobs:
         run: |
           GO_VERSION="1.22.0"
           which go || {
-            curl -ksSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+            curl -ksSL "https://golang.google.cn/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
             tar -C /usr/local -xzf /tmp/go.tar.gz
             echo "/usr/local/go/bin" >> $GITHUB_PATH
             export PATH="/usr/local/go/bin:$PATH"
