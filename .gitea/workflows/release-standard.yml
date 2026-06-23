@@ -190,6 +190,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ secrets.GH_REPO }}
+          http_proxy: ${{ secrets.PROXY_URL }}
+          https_proxy: ${{ secrets.PROXY_URL }}
         run: |
           GH_REPO_CLEAN="${GH_REPO#https://}"
           git remote add github "https://x-access-token:${GH_TOKEN}@${GH_REPO_CLEAN}"
