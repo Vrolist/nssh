@@ -175,34 +175,23 @@ jobs:
           tar czf artifacts-${{ matrix.label }}.tar.gz \
             -C /tmp/artifacts .
 
-  notify-release:
+  mirror-to-github:
     needs: [test, build]
     runs-on: ubuntu-latest
     if: success() && startsWith(github.ref, 'refs/tags/')
 
     steps:
-      - uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
+      - name: Checkout code
+        uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Release Ready - Push to GitHub Manually
+      - name: Push to GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ secrets.GH_REPO }}
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo ""
-          echo "============================================"
-          echo "  Release $VERSION - Ready to push to GitHub"
-          echo "============================================"
-          echo ""
-          echo "Run the following commands manually:"
-          echo ""
-          echo "  cd /path/to/nssh"
-          echo "  git remote add github https://github.com/Vrolist/nssh.git"
-          echo "  git push github HEAD:refs/heads/main --force"
-          echo "  git push github --tags --force"
-          echo ""
-          echo "Or use the release script:"
-          echo "  git remote set-url origin https://github.com/Vrolist/nssh.git"
-          echo "  git push origin main"
-          echo "  git push origin --tags"
-          echo ""
-          echo "============================================"
+          GH_REPO_CLEAN="${GH_REPO#https://}"
+          git remote add github "https://x-access-token:${GH_TOKEN}@${GH_REPO_CLEAN}"
+          git push github HEAD:refs/heads/main --force
+          git push github --tags --force
