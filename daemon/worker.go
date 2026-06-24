@@ -43,4 +43,7 @@ type WorkerInfo struct {
 	ReconnectNeeded bool                 `json:"-"`
 	Config          *base_core.Config   `json:"-"`
 	OfflineCount    int                 `json:"offline_count"`
+	MaxLifetime     int                 `json:"max_lifetime"` // seconds; 0 means disabled
+	LastBytesCheck  int64               `json:"-"`
+	LastCheckTime   time.Time           `json:"-"`
 }

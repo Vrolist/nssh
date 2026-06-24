@@ -394,6 +394,11 @@ func (d *Daemon) Run() {
 								d.logger.Info("Worker %s back online, reset offline count from %d", p.Username, p.OfflineCount)
 								p.OfflineCount = 0
 							}
+
+							// MaxLifetime check: restart idle worker after exceeding lifetime
+							if shouldRestart, restartKey := CheckWorkerLifetime(p, key); shouldRestart {
+								go d.performAction("restart", p, restartKey)
+							}
 						}
 
 					if len(m) == 0 {
@@ -480,6 +485,7 @@ func (d *Daemon) handleStartTransport(params map[string]string) string {
 		Password:       params["password"],
 		SSHKeyPath:     params["ssh_key"],
 		ReconnectDelay: reconnectDelay,
+		MaxLifetime:    parseInt(params["max_lifetime"]),
 	}
 
 	if err := validateConfig(config); err != nil {
@@ -878,6 +884,41 @@ func sanitizeForFilename(s string) string {
 	return s
 }
 
+// CheckWorkerLifetime checks if a worker has exceeded its MaxLifetime and is idle.
+// Returns (shouldRestart bool, workerKey string).
+// This function mutates worker.LastCheckTime and worker.LastBytesCheck as side effects.
+func CheckWorkerLifetime(worker *WorkerInfo, key string) (bool, string) {
+	if worker.MaxLifetime <= 0 || worker.Status != "online" || worker.Config == nil {
+		return false, ""
+	}
+
+	elapsed := time.Since(worker.StartTime)
+	maxLife := time.Duration(worker.MaxLifetime) * time.Second
+	if elapsed < maxLife {
+		return false, ""
+	}
+
+	currentBytes := int64(0)
+	if worker.StatsManager != nil {
+		currentBytes = worker.StatsManager.GetBytesTransferred()
+	}
+
+	if worker.LastCheckTime.IsZero() || worker.LastBytesCheck == currentBytes {
+		if !worker.LastCheckTime.IsZero() && time.Since(worker.LastCheckTime) >= 30*time.Second {
+			return true, key
+		}
+		if worker.LastCheckTime.IsZero() {
+			worker.LastCheckTime = time.Now()
+			worker.LastBytesCheck = currentBytes
+		}
+	} else {
+		worker.LastCheckTime = time.Now()
+		worker.LastBytesCheck = currentBytes
+	}
+
+	return false, ""
+}
+
 func (d *Daemon) startWorker(config *base_core.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -889,7 +930,7 @@ func (d *Daemon) startWorker(config *base_core.Config) error {
 		}
 
 		worker := &WorkerInfo{
-			ID:        workerKey,
+			ID:         workerKey,
 			CancelFunc: cancel,
 			ErrorChan:  make(chan error, 1),
 			DoneChan:   make(chan struct{}),
@@ -901,8 +942,9 @@ func (d *Daemon) startWorker(config *base_core.Config) error {
 			RemotePort: config.RemotePort,
 			Password:   config.Password,
 			SSHKeyPath: config.SSHKeyPath,
-			StartTime:   time.Now(),
+			StartTime:  time.Now(),
 			Status:     "offline",
+			MaxLifetime: config.MaxLifetime,
 			Config:     config,
 		}
 		m[workerKey] = worker
@@ -930,6 +972,7 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 	worker.LastRegisterTime = time.Now()
 
 	statsManager := base_core.NewStatsManager(config, true)
+	worker.StatsManager = statsManager
 	defer statsManager.Stop()
 
 	for {

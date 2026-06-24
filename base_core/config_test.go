@@ -176,3 +176,33 @@ func TestLoadConfigFromEnv_WithEnvValues(t *testing.T) {
 		t.Errorf("Password = %q, want secret", config.Password)
 	}
 }
+
+// === MaxLifetime 测试 ===
+
+func TestLoadConfigFromEnv_MaxLifetimeDefault(t *testing.T) {
+	os.Unsetenv("MAX_LIFETIME")
+	config := LoadConfigFromEnv()
+	if config.MaxLifetime != 172800 {
+		t.Errorf("MaxLifetime default = %d, want 172800 (48h)", config.MaxLifetime)
+	}
+}
+
+func TestLoadConfigFromEnv_MaxLifetimeFromEnv(t *testing.T) {
+	os.Setenv("MAX_LIFETIME", "86400")
+	defer os.Unsetenv("MAX_LIFETIME")
+
+	config := LoadConfigFromEnv()
+	if config.MaxLifetime != 86400 {
+		t.Errorf("MaxLifetime = %d, want 86400", config.MaxLifetime)
+	}
+}
+
+func TestLoadConfigFromEnv_MaxLifetimeDisabled(t *testing.T) {
+	os.Setenv("MAX_LIFETIME", "0")
+	defer os.Unsetenv("MAX_LIFETIME")
+
+	config := LoadConfigFromEnv()
+	if config.MaxLifetime != 0 {
+		t.Errorf("MaxLifetime = %d, want 0 (disabled)", config.MaxLifetime)
+	}
+}

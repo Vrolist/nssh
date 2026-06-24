@@ -81,6 +81,9 @@ func main() {
 	var reconnectDelay int
 	pflag.IntVarP(&reconnectDelay, "reconnect", "r", 30, "Reconnect delay in seconds")
 
+	var maxLifetime int
+	pflag.IntVar(&maxLifetime, "max-lifetime", 172800, "Max connection lifetime in seconds (0=disable, default 172800=48h)")
+
 	pflag.Parse()
 
 	if *daemonInnerMode {
@@ -98,6 +101,7 @@ func main() {
 
 	if *daemonMode && reverseTunnel != "" {
 		config := base_core.LoadConfig(reverseTunnel, port, password, sshKey, reconnectDelay)
+		config.MaxLifetime = maxLifetime
 
 		username, serverHost, serverPort := parsePositionalArgs()
 		if username != "" {
@@ -130,6 +134,7 @@ func main() {
 
 	if *daemonMode {
 		config := base_core.LoadConfig(reverseTunnel, port, password, sshKey, reconnectDelay)
+		config.MaxLifetime = maxLifetime
 
 		username, serverHost, serverPort := parsePositionalArgs()
 		if username != "" {
@@ -145,7 +150,6 @@ func main() {
 		if serverPort > 0 {
 			config.ServerPort = serverPort
 		}
-
 		validateConfig(config)
 
 		if reverseTunnel == "" {
@@ -203,6 +207,7 @@ func main() {
 
 	if *daemonMode {
 		config := base_core.LoadConfig(reverseTunnel, port, password, sshKey, reconnectDelay)
+		config.MaxLifetime = maxLifetime
 
 		username, serverHost, serverPort := parsePositionalArgs()
 		if username != "" {
@@ -240,7 +245,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	runForeground(reverseTunnel, port, password, sshKey, reconnectDelay)
+	runForeground(reverseTunnel, port, password, sshKey, reconnectDelay, maxLifetime)
 }
 
 func parsePositionalArgs() (username, serverHost string, serverPort int) {
@@ -432,8 +437,9 @@ func runDaemonInner() {
 	d.Run()
 }
 
-func runForeground(reverseTunnel string, port int, password string, sshKey string, reconnectDelay int) {
+func runForeground(reverseTunnel string, port int, password string, sshKey string, reconnectDelay int, maxLifetime int) {
 	config := base_core.LoadConfig(reverseTunnel, port, password, sshKey, reconnectDelay)
+	config.MaxLifetime = maxLifetime
 
 	username, serverHost, serverPort := parsePositionalArgs()
 	if username != "" {
@@ -758,6 +764,7 @@ func sendStartCommand(config *base_core.Config) {
 		"password":        config.Password,
 		"ssh_key":         config.SSHKeyPath,
 		"reconnect_delay": strconv.Itoa(config.ReconnectDelay),
+		"max_lifetime":    strconv.Itoa(config.MaxLifetime),
 	}
 
 	respStr, err := transport.SendCommand(daemon.CMD_START, params, time.Now().Unix())

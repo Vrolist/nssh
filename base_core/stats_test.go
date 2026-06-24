@@ -204,3 +204,38 @@ func TestStatsManager_Stop_AfterStart(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	sm.Stop()
 }
+
+// === GetBytesTransferred 测试 ===
+
+func TestStatsManager_GetBytesTransferred_InitialZero(t *testing.T) {
+	sm := newTestStatsManager()
+	if got := sm.GetBytesTransferred(); got != 0 {
+		t.Errorf("GetBytesTransferred() = %d, want 0", got)
+	}
+}
+
+func TestStatsManager_GetBytesTransferred_AfterAdd(t *testing.T) {
+	sm := newTestStatsManager()
+	sm.AddBytesTransferred(1024)
+	sm.AddBytesTransferred(512)
+	if got := sm.GetBytesTransferred(); got != 1536 {
+		t.Errorf("GetBytesTransferred() = %d, want 1536", got)
+	}
+}
+
+func TestStatsManager_GetBytesTransferred_Concurrent(t *testing.T) {
+	sm := newTestStatsManager()
+	done := make(chan struct{})
+	for i := 0; i < 10; i++ {
+		go func() {
+			sm.AddBytesTransferred(100)
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+	if got := sm.GetBytesTransferred(); got != 1000 {
+		t.Errorf("GetBytesTransferred() = %d, want 1000", got)
+	}
+}

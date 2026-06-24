@@ -146,6 +146,12 @@ func (sm *StatsManager) AddBytesTransferred(bytes int64) {
 	sm.stats.BytesTransferred += bytes
 }
 
+func (sm *StatsManager) GetBytesTransferred() int64 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.stats.BytesTransferred
+}
+
 func (sm *StatsManager) PrintStatus() {
 	sm.mu.Lock()
 	sm.stats.Uptime = time.Since(sm.stats.StartTime).Round(time.Second).String()

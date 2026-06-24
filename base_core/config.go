@@ -23,6 +23,7 @@ type Config struct {
 	RemotePort       int
 	ReconnectDelay   int
 	MaxOfflineCount  int
+	MaxLifetime      int  // MaxLifetime in seconds; 0 means no lifetime restart
 	Version          string
 }
 
@@ -52,6 +53,7 @@ func LoadConfig(reverseTunnel string, port int, password string, sshKey string, 
 		LocalPort:      getEnvInt("LOCAL_PORT", 80),
 		RemotePort:     getEnvInt("REMOTE_PORT", 8000),
 		ReconnectDelay: getEnvInt("RECONNECT_DELAY", 30),
+		MaxLifetime:    getEnvInt("MAX_LIFETIME", 172800),
 	}
 
 	args := flag.Args()
@@ -135,6 +137,7 @@ func LoadConfigFromEnv() *Config {
 		RemotePort:      getEnvInt("NSSH_REMOTE_PORT", 0),
 		ReconnectDelay:  getEnvInt("RECONNECT_DELAY", 60),
 		MaxOfflineCount: getEnvInt("MAX_OFFLINE_COUNT", 14400),
+		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
 		Version:         BuildVersion,
 	}
 }
