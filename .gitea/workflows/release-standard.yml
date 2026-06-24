@@ -97,7 +97,7 @@ jobs:
           else
             DOWNLOAD_CMD=""
             command -v curl >/dev/null 2>&1 && DOWNLOAD_CMD="curl -fsSL --connect-timeout 30 --max-time 300 -o"
-            command -v wget >/dev/null 2>&1 && DOWNLOAD_CMD="wget -q --connect-timeout=30 --timeout=300 -O"
+            command -v wget >/dev/null 2>&1 && DOWNLOAD_CMD="wget -q -T 300 -O"
             if [ -z "$DOWNLOAD_CMD" ]; then
               echo "Error: neither curl nor wget available"
               exit 1
