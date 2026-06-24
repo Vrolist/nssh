@@ -658,7 +658,8 @@ func printProcessList(data interface{}) {
 		return timeI.Before(timeJ)
 	})
 
-	maxLocalServerWidth := 20
+	maxLocalPortWidth := 20
+	maxRemotePortWidth := 8
 	maxUserWidth := 10
 	maxRemoteServerWidth := 20
 	maxStatusWidth := 8
@@ -674,16 +675,21 @@ func printProcessList(data interface{}) {
 		serverPort := int(processMap["server_port"].(float64))
 		localHost, _ := processMap["local_host"].(string)
 		localPort := int(processMap["local_port"].(float64))
+		remotePort := int(processMap["remote_port"].(float64))
 		status, _ := processMap["status"].(string)
 
-		localServerStr := fmt.Sprintf("%s:%d", localHost, localPort)
+		localPortStr := fmt.Sprintf("%s:%d", localHost, localPort)
+		remotePortStr := strconv.Itoa(remotePort)
 		remoteServerStr := fmt.Sprintf("%s:%d", serverHost, serverPort)
 
-		if len(localServerStr) > maxLocalServerWidth {
-			maxLocalServerWidth = len(localServerStr)
+		if len(localPortStr) > maxLocalPortWidth {
+			maxLocalPortWidth = len(localPortStr)
 		}
-		if maxLocalServerWidth > 40 {
-			maxLocalServerWidth = 40
+		if maxLocalPortWidth > 40 {
+			maxLocalPortWidth = 40
+		}
+		if len(remotePortStr) > maxRemotePortWidth {
+			maxRemotePortWidth = len(remotePortStr)
 		}
 		if len(username) > maxUserWidth {
 			maxUserWidth = len(username)
@@ -703,13 +709,15 @@ func printProcessList(data interface{}) {
 	}
 
 	fmt.Printf("Daemon Version: %s (PID: %d)\n\n", daemonVersion, daemonPID)
-	fmt.Printf("%-4s %-*s %-*s %-*s %-*s\n",
-		"#", maxLocalServerWidth, "local-server",
+	fmt.Printf("%-4s %-*s %-*s %-*s %-*s %-*s\n",
+		"#",
+		maxRemotePortWidth, "remote",
+		maxLocalPortWidth, "local-port",
 		maxUserWidth, "user",
 		maxRemoteServerWidth, "remote-server",
 		maxStatusWidth, "status")
 
-	totalWidth := 4 + maxLocalServerWidth + maxUserWidth + maxRemoteServerWidth + maxStatusWidth
+	totalWidth := 4 + maxRemotePortWidth + maxLocalPortWidth + maxUserWidth + maxRemoteServerWidth + maxStatusWidth
 	fmt.Println(strings.Repeat("-", totalWidth))
 
 	for i, p := range processes {
@@ -723,14 +731,17 @@ func printProcessList(data interface{}) {
 		serverPort := int(processMap["server_port"].(float64))
 		localHost, _ := processMap["local_host"].(string)
 		localPort := int(processMap["local_port"].(float64))
+		remotePort := int(processMap["remote_port"].(float64))
 		status, _ := processMap["status"].(string)
 
-		localServerStr := fmt.Sprintf("%s:%d", localHost, localPort)
+		localPortStr := fmt.Sprintf("%s:%d", localHost, localPort)
+		remotePortStr := strconv.Itoa(remotePort)
 		remoteServerStr := fmt.Sprintf("%s:%d", serverHost, serverPort)
 
-		fmt.Printf("%-4d %-*s %-*s %-*s %-*s\n",
+		fmt.Printf("%-4d %-*s %-*s %-*s %-*s %-*s\n",
 			i+1,
-			maxLocalServerWidth, localServerStr,
+			maxRemotePortWidth, remotePortStr,
+			maxLocalPortWidth, localPortStr,
 			maxUserWidth, username,
 			maxRemoteServerWidth, remoteServerStr,
 			maxStatusWidth, status)
