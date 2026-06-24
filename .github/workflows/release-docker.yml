@@ -44,6 +44,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Extract version
         id: version
         run: |
@@ -53,12 +59,13 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "IMAGE=${REGISTRY}/${IMAGE_LOWER}/${IMAGE_NAME}:${VERSION}" >> $GITHUB_ENV
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image (multi-arch)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ env.IMAGE }}
           build-args: |
             VERSION=${{ env.VERSION }}
