@@ -65,3 +65,4 @@ USER nssh
 WORKDIR /tmp
 
 ENTRYPOINT ["/entrypoint.sh"]
+
