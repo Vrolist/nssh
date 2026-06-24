@@ -175,7 +175,12 @@ jobs:
 
           if ! command -v mc >/dev/null 2>&1; then
             echo "Installing mc client..."
-            curl -sL "http://dl.minio.org.cn/client/mc/release/linux-amd64/mc" -o /tmp/mc && chmod +x /tmp/mc
+            if command -v curl >/dev/null 2>&1; then
+              curl -sL "http://dl.minio.org.cn/client/mc/release/linux-amd64/mc" -o /tmp/mc
+            else
+              wget -q -T 60 "http://dl.minio.org.cn/client/mc/release/linux-amd64/mc" -O /tmp/mc
+            fi
+            chmod +x /tmp/mc
             export PATH="/tmp:$PATH"
           fi
 
