@@ -54,6 +54,6 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${IMAGE_NAME}:${{ env.VERSION }}
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           build-args: |
             VERSION=${{ env.VERSION }}
