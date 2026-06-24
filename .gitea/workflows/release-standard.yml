@@ -95,14 +95,21 @@ jobs:
             echo "/usr/local/go/bin" >> $GITHUB_PATH
             echo "Go already installed at /usr/local/go"
           else
-            command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl; }
+            DOWNLOAD_CMD=""
+            command -v curl >/dev/null 2>&1 && DOWNLOAD_CMD="curl -fsSL --connect-timeout 30 --max-time 300 -o"
+            command -v wget >/dev/null 2>&1 && DOWNLOAD_CMD="wget -q --connect-timeout=30 --timeout=300 -O"
+            if [ -z "$DOWNLOAD_CMD" ]; then
+              echo "Error: neither curl nor wget available"
+              exit 1
+            fi
             GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
             MIRRORS=(
               "http://192.168.2.36/${GO_TARBALL}"
               "https://golang.google.cn/dl/${GO_TARBALL}"
             )
             for MIRROR in "${MIRRORS[@]}"; do
-              if curl -fsSL --connect-timeout 30 --max-time 300 "$MIRROR" -o "/tmp/${GO_TARBALL}"; then
+              echo "Downloading from $MIRROR ..."
+              if $DOWNLOAD_CMD "/tmp/${GO_TARBALL}" "$MIRROR"; then
                 break
               fi
               echo "Mirror failed: $MIRROR"
