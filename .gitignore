@@ -45,3 +45,5 @@ nssh
 tmp/*
 frontend/node_modules/*
 gui/frontend/node_modules/*
+
+logs/*
