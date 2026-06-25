@@ -197,26 +197,3 @@ jobs:
           cp nssh_* /tmp/artifacts/
           tar czf artifacts-${{ matrix.label }}.tar.gz \
             -C /tmp/artifacts .
-
-  mirror-to-github:
-    needs: [test, build]
-    runs-on: ubuntu-latest
-    if: success() && startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Checkout code
-        uses: http://x-access-token:${{ secrets.GTEA_TOKEN }}@192.168.2.27/buladou/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Push to GitHub
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GH_REPO: ${{ secrets.GH_REPO }}
-          http_proxy: ${{ secrets.PROXY_URL }}
-          https_proxy: ${{ secrets.PROXY_URL }}
-        run: |
-          GH_REPO_CLEAN="${GH_REPO#https://}"
-          git remote add github "https://x-access-token:${GH_TOKEN}@${GH_REPO_CLEAN}"
-          git push github HEAD:refs/heads/main --force
-          git push github --tags --force
