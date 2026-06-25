@@ -1,0 +1,23 @@
+# =====================================================
+# Simplified Dockerfile - packaging only
+# Binary is pre-built via Go cross-compilation
+# =====================================================
+ARG BASE_REGISTRY=
+FROM ${BASE_REGISTRY}alpine:3.18
+
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/repositories && \
+    apk add --no-cache ca-certificates tzdata && \
+    addgroup -S nssh && \
+    adduser -S -D -H -s /bin/false -G nssh nssh
+
+COPY nssh /usr/local/bin/nssh
+COPY entrypoint.sh /entrypoint.sh
+
+RUN chmod +x /usr/local/bin/nssh /entrypoint.sh && \
+    mkdir -p /home/nssh/.nssh && \
+    chown -R nssh:nssh /home/nssh
+
+USER nssh
+WORKDIR /tmp
+
+ENTRYPOINT ["/entrypoint.sh"]
