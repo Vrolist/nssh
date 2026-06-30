@@ -1,0 +1,20 @@
+# =====================================================
+# Scratch-based Dockerfile - zero RUN instructions
+# Binary is pre-built via Go cross-compilation
+# System files are pre-extracted into build context
+# No QEMU needed for ANY architecture
+# =====================================================
+
+FROM scratch
+
+# System files (pre-extracted from alpine:3.18 rootfs)
+COPY rootfs/ /
+
+# Application binary and entrypoint (already chmod +x in build context)
+COPY nssh /usr/local/bin/nssh
+COPY entrypoint.sh /entrypoint.sh
+
+USER nssh
+WORKDIR /tmp
+
+ENTRYPOINT ["/entrypoint.sh"]

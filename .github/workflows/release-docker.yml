@@ -15,11 +15,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.20'
-
       - name: Run tests
         run: |
           GOTOOLCHAIN=local go test -C base_core ./...
@@ -36,7 +34,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.20'
@@ -49,14 +46,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract version
-        id: version
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           IMAGE_LOWER="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "IMAGE=${REGISTRY}/${IMAGE_LOWER}/${IMAGE_NAME}" >> $GITHUB_ENV
 
-      # Cross-compile Go binaries natively (no QEMU for compilation)
+      # ---- Step 1: Go cross-compile (pure Go, no QEMU) ----
       - name: Build amd64 binary
         env:
           CGO_ENABLED: "0"
@@ -77,19 +73,66 @@ jobs:
           go build -ldflags="-s -w -X main.Version=${{ env.VERSION }}" \
             -trimpath -o nssh_linux_arm64 .
 
-      # Build separate images, push as intermediate tags, then merge manifest
+      # ---- Step 2: Prepare rootfs (no QEMU for either arch) ----
+      # amd64: extract rootfs from native docker container
+      - name: Prepare amd64 rootfs
+        run: |
+          docker create --name amd64-alpine alpine:3.18
+          mkdir -p build/amd64/rootfs
+          docker cp amd64-alpine:/etc build/amd64/rootfs/etc
+          docker cp amd64-alpine:/usr build/amd64/rootfs/usr
+          docker cp amd64-alpine:/lib build/amd64/rootfs/lib
+          docker cp amd64-alpine:/bin build/amd64/rootfs/bin
+          docker cp amd64-alpine:/sbin build/amd64/rootfs/sbin
+          docker rm amd64-alpine
+
+          # Remove runtime dirs (Docker provides these)
+          rm -rf build/amd64/rootfs/etc/{hosts,resolv.conf}
+          rm -rf build/amd64/rootfs/dev
+          rm -rf build/amd64/rootfs/proc
+          rm -rf build/amd64/rootfs/sys
+
+          # Add nssh user
+          echo 'nssh:x:1000:1000::/home/nssh:/bin/false' >> build/amd64/rootfs/etc/passwd
+          echo 'nssh:x:1000:' >> build/amd64/rootfs/etc/group
+
+          # Application (ensure executable)
+          cp nssh_linux_amd64 build/amd64/nssh
+          chmod +x build/amd64/nssh
+          cp docker/entrypoint.sh build/amd64/
+          chmod +x build/amd64/entrypoint.sh
+          cp docker/Dockerfile.scratch build/amd64/Dockerfile
+
+      # arm64: download minirootfs tarball (no QEMU, no docker run)
+      - name: Prepare arm64 rootfs
+        run: |
+          mkdir -p build/arm64/rootfs
+          curl -fsSL "https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/aarch64/alpine-minirootfs-3.18.0-aarch64.tar.gz" \
+            -o /tmp/alpine-arm64.tar.gz
+          tar xzf /tmp/alpine-arm64.tar.gz -C build/arm64/rootfs
+
+          # Remove runtime dirs (Docker provides these)
+          rm -rf build/arm64/rootfs/dev
+          rm -rf build/arm64/rootfs/proc
+          rm -rf build/arm64/rootfs/sys
+
+          # Add nssh user
+          echo 'nssh:x:1000:1000::/home/nssh:/bin/false' >> build/arm64/rootfs/etc/passwd
+          echo 'nssh:x:1000:' >> build/arm64/rootfs/etc/group
+
+          # Application (ensure executable)
+          cp nssh_linux_arm64 build/arm64/nssh
+          chmod +x build/arm64/nssh
+          cp docker/entrypoint.sh build/arm64/
+          chmod +x build/arm64/entrypoint.sh
+          cp docker/Dockerfile.scratch build/arm64/Dockerfile
+
+      # ---- Step 3: Build & push (COPY only, no QEMU) ----
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Set up QEMU (for packaging only, not compilation)
-        uses: docker/setup-qemu-action@v3
-
       - name: Build and push amd64 image
         run: |
-          mkdir -p build/amd64
-          cp nssh_linux_amd64 build/amd64/nssh
-          cp docker/entrypoint.sh build/amd64/entrypoint.sh
-          cp docker/Dockerfile.noshell build/amd64/Dockerfile
           docker buildx build \
             --platform linux/amd64 \
             --tag ${{ env.IMAGE }}:amd64 \
@@ -98,16 +141,13 @@ jobs:
 
       - name: Build and push arm64 image
         run: |
-          mkdir -p build/arm64
-          cp nssh_linux_arm64 build/arm64/nssh
-          cp docker/entrypoint.sh build/arm64/entrypoint.sh
-          cp docker/Dockerfile.noshell build/arm64/Dockerfile
           docker buildx build \
             --platform linux/arm64 \
             --tag ${{ env.IMAGE }}:arm64 \
             --push \
             build/arm64/
 
+      # ---- Step 4: Merge into multi-arch manifest ----
       - name: Create and push multi-arch manifest
         run: |
           docker buildx imagetools create \

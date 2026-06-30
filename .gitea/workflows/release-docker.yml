@@ -14,12 +14,8 @@ on:
 env:
   GO_VERSION: "1.24.12"
   GOPROXY: "https://goproxy.cn,direct"
-  # 请在 Gitea 仓库 Settings → Actions Secrets 中配置：
-  # HARBOR_REGISTRY: Harbor 地址
-  # HARBOR_PROJECT: Harbor 项目名
-  # HARBOR_USER: Harbor 登录用户名
-  # HARBOR_PASSWORD: Harbor 登录密码
-  # GTEA_TOKEN: Gitea Access Token（用于 clone 代码）
+  # Gitea 仓库 Settings → Actions Secrets:
+  # HARBOR_REGISTRY, HARBOR_PROJECT, HARBOR_USER, HARBOR_PASSWORD, GTEA_TOKEN
   REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
   PROJECT: ${{ secrets.HARBOR_PROJECT }}
   IMAGE_NAME: nssh
@@ -77,8 +73,30 @@ jobs:
             git checkout "${TAG}"
           fi
 
+      - name: Setup Go
+        run: |
+          GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+          MIRRORS=(
+            "http://192.168.2.36/${GO_TARBALL}"
+            "https://golang.google.cn/dl/${GO_TARBALL}"
+          )
+          for MIRROR in "${MIRRORS[@]}"; do
+            if curl -fsSL --connect-timeout 30 --max-time 300 "$MIRROR" -o "/tmp/${GO_TARBALL}"; then
+              break
+            fi
+            echo "Mirror failed: $MIRROR"
+          done
+          if [ -f "/tmp/${GO_TARBALL}" ]; then
+            tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
+            echo "/usr/local/go/bin" >> $GITHUB_PATH
+            go version
+            go env -w GOPROXY=${GOPROXY}
+          else
+            echo "Error: Failed to download Go from all mirrors"
+            exit 1
+          fi
+
       - name: Extract version
-        id: version
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
@@ -88,27 +106,144 @@ jobs:
             VERSION="dev-$(date +%Y%m%d%H%M%S)"
           fi
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          echo "Version: ${VERSION}"
+          echo "Image: ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${VERSION}"
 
-      - name: Build Docker image
+      # ---- Step 1: Go cross-compile (no QEMU) ----
+      - name: Build amd64 binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+          GOTOOLCHAIN: local
         run: |
-          IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}"
-          echo "Building ${IMAGE}:${VERSION} ..."
-          DOCKER_BUILDKIT=0 docker build \
-            --build-arg BASE_REGISTRY="192.168.2.88:80/library/" \
-            --build-arg VERSION=${VERSION} \
-            -f docker/Dockerfile \
-            -t ${IMAGE}:${VERSION} \
-            .
-          echo "Build complete"
+          go build -ldflags="-s -w -X main.Version=${{ env.VERSION }}" \
+            -trimpath -o nssh_linux_amd64 .
+
+      - name: Build arm64 binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: arm64
+          GOTOOLCHAIN: local
+        run: |
+          go build -ldflags="-s -w -X main.Version=${{ env.VERSION }}" \
+            -trimpath -o nssh_linux_arm64 .
+
+      # ---- Step 2: Prepare rootfs (no QEMU) ----
+      # amd64: extract rootfs from native docker container (use local mirror)
+      - name: Prepare amd64 rootfs
+        run: |
+          docker create --name amd64-alpine 192.168.2.88:80/library/alpine:3.18
+          mkdir -p build/amd64/rootfs
+          docker cp amd64-alpine:/etc build/amd64/rootfs/etc
+          docker cp amd64-alpine:/usr build/amd64/rootfs/usr
+          docker cp amd64-alpine:/lib build/amd64/rootfs/lib
+          docker cp amd64-alpine:/bin build/amd64/rootfs/bin
+          docker cp amd64-alpine:/sbin build/amd64/rootfs/sbin
+          docker rm amd64-alpine
+
+          # Remove runtime dirs (Docker provides these)
+          rm -rf build/amd64/rootfs/etc/{hosts,resolv.conf}
+          rm -rf build/amd64/rootfs/dev
+          rm -rf build/amd64/rootfs/proc
+          rm -rf build/amd64/rootfs/sys
+
+          # Add nssh user
+          echo 'nssh:x:1000:1000::/home/nssh:/bin/false' >> build/amd64/rootfs/etc/passwd
+          echo 'nssh:x:1000:' >> build/amd64/rootfs/etc/group
+
+          # Application (ensure executable)
+          cp nssh_linux_amd64 build/amd64/nssh
+          chmod +x build/amd64/nssh
+          cp docker/entrypoint.sh build/amd64/
+          chmod +x build/amd64/entrypoint.sh
+          cp docker/Dockerfile.scratch build/amd64/Dockerfile
+
+      # arm64: download minirootfs tarball (no QEMU, no docker run)
+      - name: Prepare arm64 rootfs
+        run: |
+          mkdir -p build/arm64/rootfs
+          # Try local mirror first, then official
+          ARM64_URLS=(
+            "http://192.168.2.36/alpine-minirootfs-3.18.0-aarch64.tar.gz"
+            "https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/aarch64/alpine-minirootfs-3.18.0-aarch64.tar.gz"
+          )
+          DOWNLOADED=false
+          for URL in "${ARM64_URLS[@]}"; do
+            if curl -fsSL --connect-timeout 10 --max-time 120 "$URL" -o /tmp/alpine-arm64.tar.gz; then
+              DOWNLOADED=true
+              echo "Downloaded from: $URL"
+              break
+            fi
+            echo "Mirror failed: $URL"
+          done
+          if [ "$DOWNLOADED" != "true" ]; then
+            echo "Error: Failed to download arm64 minirootfs from all mirrors"
+            exit 1
+          fi
+          tar xzf /tmp/alpine-arm64.tar.gz -C build/arm64/rootfs
+
+          # Remove runtime dirs (Docker provides these)
+          rm -rf build/arm64/rootfs/dev
+          rm -rf build/arm64/rootfs/proc
+          rm -rf build/arm64/rootfs/sys
+
+          # Add nssh user
+          echo 'nssh:x:1000:1000::/home/nssh:/bin/false' >> build/arm64/rootfs/etc/passwd
+          echo 'nssh:x:1000:' >> build/arm64/rootfs/etc/group
+
+          # Application (ensure executable)
+          cp nssh_linux_arm64 build/arm64/nssh
+          chmod +x build/arm64/nssh
+          cp docker/entrypoint.sh build/arm64/
+          chmod +x build/arm64/entrypoint.sh
+          cp docker/Dockerfile.scratch build/arm64/Dockerfile
+
+      # ---- Step 3: Setup Buildx + Login ----
+      - name: Set up Docker Buildx
+        run: |
+          if ! docker buildx version 2>/dev/null; then
+            mkdir -p ~/.docker/cli-plugins
+            BUILDX_URL="https://github.com/docker/buildx/releases/latest/download/buildx-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+            curl -fsSL "$BUILDX_URL" -o ~/.docker/cli-plugins/docker-buildx
+            chmod +x ~/.docker/cli-plugins/docker-buildx
+          fi
+          docker buildx create --name multiarch --driver docker-container --use
+          docker buildx inspect --bootstrap
 
       - name: Login to Harbor
         run: |
           echo "${{ secrets.HARBOR_PASSWORD }}" | docker login ${REGISTRY} \
             -u "${{ secrets.HARBOR_USER }}" --password-stdin
 
-      - name: Push Docker image
+      # ---- Step 4: Build & push (COPY only, no QEMU) ----
+      - name: Build and push amd64 image
         run: |
-          IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}"
-          docker push ${IMAGE}:${VERSION}
-          echo "Push complete"
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:amd64 \
+            --push \
+            build/amd64/
+
+      - name: Build and push arm64 image
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --tag ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:arm64 \
+            --push \
+            build/arm64/
+
+      # ---- Step 5: Merge into multi-arch manifest ----
+      - name: Create and push multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            --tag ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} \
+            ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:amd64 \
+            ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:arm64
+          echo "Pushed ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} (amd64+arm64)"
+
+      # ---- Done ----
+      - name: Summary
+        run: |
+          echo "Docker multi-arch image pushed:"
+          echo "  ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} (amd64+arm64)"
