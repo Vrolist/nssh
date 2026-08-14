@@ -165,11 +165,11 @@ jobs:
             exit 0
           fi
 
-          FILENAME="nssh_${GOOS}_${GOARCH}"
-          [ "${GOOS}" = "windows" ] && FILENAME="${FILENAME}.exe"
+          SOURCE="nssh_${GOOS}_${GOARCH}"
+          [ "${GOOS}" = "windows" ] && SOURCE="${SOURCE}.exe"
 
-          if [ ! -f "${FILENAME}" ]; then
-            echo "Binary ${FILENAME} not found, skipping"
+          if [ ! -f "${SOURCE}" ]; then
+            echo "Binary ${SOURCE} not found, skipping"
             exit 0
           fi
 
@@ -187,8 +187,10 @@ jobs:
           mc alias set minio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
           mc mb "minio/${MINIO_BUCKET}" 2>&1 || true
 
-          TARGET_PATH="${VERSION}/${LABEL}/${FILENAME}"
-          mc cp "${FILENAME}" "minio/${MINIO_BUCKET}/${TARGET_PATH}"
+          FILENAME="nssh-opensource-v${VERSION}-${LABEL}"
+          [ "${GOOS}" = "windows" ] && FILENAME="${FILENAME}.exe"
+          TARGET_PATH="nssh-v${VERSION}/${LABEL}/${FILENAME}"
+          mc cp "${SOURCE}" "minio/${MINIO_BUCKET}/${TARGET_PATH}"
           echo "Uploaded ${FILENAME} to MinIO: ${MINIO_BUCKET}/${TARGET_PATH}"
 
       - name: Archive artifacts
