@@ -1,0 +1,33 @@
+{
+  "name": "@buladou/nssh",
+  "version": "0.0.0",
+  "description": "SSH reverse tunnel client - expose local services behind NAT to the internet",
+  "license": "MIT",
+  "bin": {
+    "nssh": "bin/nssh.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "optionalDependencies": {
+    "@buladou/nssh-darwin-arm64": "0.0.0",
+    "@buladou/nssh-darwin-x64": "0.0.0",
+    "@buladou/nssh-win32-x64": "0.0.0",
+    "@buladou/nssh-linux-x64": "0.0.0",
+    "@buladou/nssh-linux-arm64": "0.0.0"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "keywords": [
+    "ssh",
+    "tunnel",
+    "reverse-tunnel",
+    "nat",
+    "内网穿透"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Vrolist/nssh.git"
+  }
+}

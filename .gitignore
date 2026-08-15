@@ -1,5 +1,5 @@
 # Binaries
-bin/
+/bin/
 *.exe
 *.dll
 *.so
@@ -11,6 +11,7 @@ bin/
 
 # Output
 *.out
+dist/
 
 # Dependency directories
 vendor/
