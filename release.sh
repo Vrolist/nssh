@@ -7,6 +7,7 @@ set -e
 # =====================================================
 
 GH_REPO="https://github.com/Vrolist/nssh.git"
+GITEA_REMOTE="gitea"
 
 # =====================================================
 # Step 1: Select push target
@@ -143,9 +144,9 @@ if [ "$PUSH_TARGET" = "github" ]; then
     echo "  - Release Docker Image (ghcr.io)"
     echo "  - Release Standard Platforms (GitHub Releases)"
 else
-    echo "  1. git push origin main"
+    echo "  1. git push ${GITEA_REMOTE} main"
     echo "  2. git tag -a $TAG"
-    echo "  3. git push origin $TAG"
+    echo "  3. git push ${GITEA_REMOTE} $TAG"
     if [ "$PUSH_TARGET" = "both" ]; then
         echo "  4. git push github HEAD:refs/heads/main --force"
         echo "  5. git push github $TAG --force"
@@ -175,15 +176,22 @@ fi
 # Step 5: Execute - Gitea
 # =====================================================
 if [ "$PUSH_TARGET" != "github" ]; then
+    # 检查 Gitea remote 是否存在
+    if ! git remote | grep -qx "${GITEA_REMOTE}"; then
+        echo "Error: remote '${GITEA_REMOTE}' not found. Add it first:"
+        echo "  git remote add ${GITEA_REMOTE} ssh://git@192.168.2.27:1022/buladou/nssh.git"
+        exit 1
+    fi
+
     echo ""
     echo "[Gitea] [1/3] Pushing main to Gitea..."
-    git push origin main
+    git push "${GITEA_REMOTE}" main
 
     echo "[Gitea] [2/3] Creating tag $TAG..."
     git tag -a "$TAG" -m "Release $TAG"
 
     echo "[Gitea] [3/3] Pushing tag $TAG to Gitea..."
-    git push origin "$TAG"
+    git push "${GITEA_REMOTE}" "$TAG"
 
     echo ""
     echo "[OK] Gitea released: $TAG"
