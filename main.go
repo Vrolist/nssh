@@ -239,13 +239,48 @@ func main() {
 	}
 
 	if reverseTunnel == "" {
-		fmt.Println("Error: Missing required parameter -R (reverse tunnel)")
-		// fmt.Println("Usage: nssh -R remote_port:local_host:local_port [options] user@host")
-		// fmt.Println("Example: nssh -R 8000:localhost:80 user@ssh.example.com -p 22 --passwd password")
+		fmt.Println("Error: missing required parameter -R (reverse tunnel)")
+		fmt.Println()
+		printUsage()
 		os.Exit(1)
 	}
 
 	runForeground(reverseTunnel, port, password, sshKey, reconnectDelay, maxLifetime)
+}
+
+func printUsage() {
+	fmt.Println("===============================================")
+	fmt.Println("  nssh - SSH Reverse Tunnel Client (NAT traversal)")
+	fmt.Println("===============================================")
+	fmt.Println("  Project: https://www.neiwangyun.net")
+	fmt.Println("  Developer: buladou")
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  nssh -R <remote_port>:<local_host>:<local_port> [options] user@server")
+	fmt.Println()
+	fmt.Println("Example:")
+	fmt.Println("  nssh -R 8080:localhost:80 user@example.com -p 2122 -P password")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  -R, --remote       reverse tunnel: remote_port:local_host:local_port (required)")
+	fmt.Println("  -p, --port         SSH server port")
+	fmt.Println("  -P, --passwd       SSH password")
+	fmt.Println("  -r, --reconnect    reconnect delay (seconds, default 30)")
+	fmt.Println("      --daemon       run as background daemon (auto-reconnect)")
+	fmt.Println("      --list         list all tunnels")
+	fmt.Println("      --stop user    stop a tunnel")
+	fmt.Println("      --stop-all     stop all tunnels")
+	fmt.Println("      --restart user restart a tunnel")
+	fmt.Println("  -v, --version      show version")
+	fmt.Println()
+	fmt.Println("Install:")
+	fmt.Println("  npm:      npm install -g @buladou/nssh")
+	fmt.Println("  apt:      apt install nssh")
+	fmt.Println("  binary:   download from https://www.neiwangyun.net")
+	fmt.Println("  docker:   docker run --restart=always neiwangyun/nssh ...")
+	fmt.Println()
+	fmt.Println("Platforms: linux (amd64/arm64/arm), darwin (amd64/arm64), windows (amd64), NAS (amd64/arm/arm64)")
+	fmt.Println()
 }
 
 func parsePositionalArgs() (username, serverHost string, serverPort int) {
