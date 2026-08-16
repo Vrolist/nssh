@@ -259,13 +259,15 @@ jobs:
             ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:arm64
           docker push ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:arm64
 
-      # ---- Step 5: Merge into multi-arch manifest (no buildx) ----
+      # ---- Step 5: Merge into multi-arch manifest ----
+      # imagetools create 直接读取已 push 的镜像 manifest 合并为 OCI index，
+      # 不依赖 buildkit 容器（无外网也能用），与 GitHub 版保持一致
       - name: Create and push multi-arch manifest
         run: |
-          docker manifest create --amend ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} \
+          docker buildx imagetools create \
+            --tag ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} \
             ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:amd64 \
             ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:arm64
-          docker manifest push ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }}
           echo "Pushed ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} (amd64+arm64)"
 
       # ---- Done ----
