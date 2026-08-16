@@ -267,14 +267,46 @@ jobs:
           docker push ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:arm64
 
       # ---- Step 5: Merge into multi-arch manifest ----
-      # imagetools create 直接读取已 push 的镜像 manifest 合并为 OCI index，
-      # 不依赖 buildkit 容器（无外网也能用），与 GitHub 版保持一致
+      # 本地 Harbor: 80 端口为纯 HTTP 且 308 重定向到自签 HTTPS 443。
+      # docker daemon 因 insecure-registries 配置能跟随重定向并跳过证书校验，
+      # 而 buildx imagetools 用自带 registry 客户端（不读 daemon 配置）默认
+      # HTTPS 访问 80 端口，收到明文 HTTP 响应，报
+      # "http: server gave HTTP response to HTTPS client"。
+      # 因此这里直接用 curl 操作 Harbor Registry v2 API 组装并推送 OCI index
+      # （-k 跳过 Harbor 自签证书校验），不依赖 buildx/docker CLI 的 registry 客户端。
       - name: Create and push multi-arch manifest
         run: |
-          docker buildx imagetools create \
-            --tag ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} \
-            ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:amd64 \
-            ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:arm64
+          set -euo pipefail
+          # Harbor https 端口固定为 443（80 端口 308 重定向到此）
+          HARBOR_HOST="${REGISTRY%%:*}"
+          REG_URL="https://${HARBOR_HOST}:443"
+          REPO="${PROJECT}/${IMAGE_NAME}"
+          AUTH="$(printf '%s:%s' '${{ secrets.HARBOR_USER }}' '${{ secrets.HARBOR_PASSWORD }}' | base64 -w0)"
+          ACCEPT="application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json"
+
+          # 1) 拉取两个单架构 manifest，计算 digest/size（docker push 推的是 schema2）
+          curl -kfsSL -H "Authorization: Basic ${AUTH}" -H "Accept: ${ACCEPT}" \
+            "${REG_URL}/v2/${REPO}/manifests/amd64" -o /tmp/m_amd64.json
+          curl -kfsSL -H "Authorization: Basic ${AUTH}" -H "Accept: ${ACCEPT}" \
+            "${REG_URL}/v2/${REPO}/manifests/arm64" -o /tmp/m_arm64.json
+          AMD64_DIGEST="sha256:$(sha256sum /tmp/m_amd64.json | awk '{print $1}')"
+          AMD64_SIZE="$(wc -c < /tmp/m_amd64.json)"
+          ARM64_DIGEST="sha256:$(sha256sum /tmp/m_arm64.json | awk '{print $1}')"
+          ARM64_SIZE="$(wc -c < /tmp/m_arm64.json)"
+          echo "amd64: ${AMD64_DIGEST} (${AMD64_SIZE}B)"
+          echo "arm64: ${ARM64_DIGEST} (${ARM64_SIZE}B)"
+
+          # 2) 组装 OCI index（引用 Harbor 中已有的单架构 manifest）
+          printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.docker.distribution.manifest.v2+json","size":%s,"digest":"%s","platform":{"architecture":"amd64","os":"linux"}},{"mediaType":"application/vnd.docker.distribution.manifest.v2+json","size":%s,"digest":"%s","platform":{"architecture":"arm64","os":"linux"}}]}' \
+            "${AMD64_SIZE}" "${AMD64_DIGEST}" "${ARM64_SIZE}" "${ARM64_DIGEST}" > /tmp/index.json
+          echo "Index: $(cat /tmp/index.json)"
+
+          # 3) 推送到 <VERSION> 标签
+          curl -kfsSL -X PUT \
+            -H "Authorization: Basic ${AUTH}" \
+            -H "Content-Type: application/vnd.oci.image.index.v1+json" \
+            --data-binary @/tmp/index.json \
+            "${REG_URL}/v2/${REPO}/manifests/${{ env.VERSION }}"
           echo "Pushed ${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${{ env.VERSION }} (amd64+arm64)"
 
       # ---- Done ----
