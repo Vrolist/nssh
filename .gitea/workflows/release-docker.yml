@@ -184,18 +184,25 @@ jobs:
       - name: Prepare arm64 rootfs
         run: |
           mkdir -p build/arm64/rootfs
-          # Try local mirror first, then official
+          # Try China mirrors first (fast on intranet), then official
           ARM64_URLS=(
-            "http://192.168.2.36/alpine-minirootfs-3.18.0-aarch64.tar.gz"
+            "https://mirrors.aliyun.com/alpine/v3.18/releases/aarch64/alpine-minirootfs-3.18.0-aarch64.tar.gz"
+            "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.18/releases/aarch64/alpine-minirootfs-3.18.0-aarch64.tar.gz"
+            "https://mirror.sjtu.edu.cn/alpine/v3.18/releases/aarch64/alpine-minirootfs-3.18.0-aarch64.tar.gz"
+            "https://mirrors.ustc.edu.cn/alpine/v3.18/releases/aarch64/alpine-minirootfs-3.18.0-aarch64.tar.gz"
             "https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/aarch64/alpine-minirootfs-3.18.0-aarch64.tar.gz"
           )
           DOWNLOADED=false
           for URL in "${ARM64_URLS[@]}"; do
-            if curl -fsSL --connect-timeout 10 --max-time 120 "$URL" -o /tmp/alpine-arm64.tar.gz; then
+            echo "Trying: $URL"
+            if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 180 "$URL" -o /tmp/alpine-arm64.tar.gz \
+              && [ -s /tmp/alpine-arm64.tar.gz ] \
+              && tar tzf /tmp/alpine-arm64.tar.gz >/dev/null 2>&1; then
               DOWNLOADED=true
               echo "Downloaded from: $URL"
               break
             fi
+            rm -f /tmp/alpine-arm64.tar.gz
             echo "Mirror failed: $URL"
           done
           if [ "$DOWNLOADED" != "true" ]; then
