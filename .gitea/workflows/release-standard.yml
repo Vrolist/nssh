@@ -142,6 +142,11 @@ jobs:
         env:
           GO_VER: ${{ matrix.go_version }}
         run: |
+          # Alpine 容器缺少 glibc 动态链接器，Go 官方二进制无法执行
+          # 安装 libc6-compat 提供 /lib64/ld-linux-x86-64.so.2
+          if command -v apk >/dev/null 2>&1; then
+            apk add --no-cache libc6-compat 2>/dev/null || true
+          fi
           # Ensure curl is available (some self-hosted runners lack it)
           if ! command -v curl >/dev/null 2>&1; then
             echo "curl not found, trying to install..."
