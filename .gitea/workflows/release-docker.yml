@@ -82,23 +82,32 @@ jobs:
 
       - name: Remove Docker daemon proxy
         run: |
-          # 旧代理 192.168.2.40:7890 已停用，清除 daemon 侧代理配置
+          # 旧代理 192.168.2.40:7890 已停用，彻底清除 Docker daemon 代理
           OVERRIDE_DIR="/etc/systemd/system/docker.service.d"
-          OVERRIDE_FILE="${OVERRIDE_DIR}/proxy.conf"
-          if [ -f "${OVERRIDE_FILE}" ]; then
-            echo "Found proxy config at ${OVERRIDE_FILE}, removing..."
-            cat "${OVERRIDE_FILE}"
-            sudo rm -f "${OVERRIDE_FILE}"
-            sudo systemctl daemon-reload
-            sudo systemctl restart docker
-            echo "Docker daemon proxy removed and restarted"
-          else
-            echo "No proxy.conf found, checking for other proxy configs..."
-            ls -la "${OVERRIDE_DIR}/" 2>/dev/null || echo "No override dir"
+          # 删除所有 override 文件中的代理配置
+          if [ -d "${OVERRIDE_DIR}" ]; then
+            for f in "${OVERRIDE_DIR}"/*.conf; do
+              [ -f "$f" ] || continue
+              if grep -qi -E '(proxy|PROXY)' "$f" 2>/dev/null; then
+                echo "Removing proxy from $f"
+                sudo rm -f "$f"
+              fi
+            done
           fi
-          # 清除 shell 环境中的代理变量，防止 docker CLI 继承
-          unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
-          echo "Proxy environment cleared"
+          # 写入空代理覆盖，确保 daemon 不走任何代理
+          sudo mkdir -p "${OVERRIDE_DIR}"
+          sudo tee "${OVERRIDE_DIR}/no-proxy.conf" > /dev/null <<'EOF'
+          [Service]
+          Environment="HTTP_PROXY="
+          Environment="HTTPS_PROXY="
+          Environment="http_proxy="
+          Environment="https_proxy="
+          Environment="NO_PROXY=*"
+          EOF
+          sudo systemctl daemon-reload
+          sudo systemctl restart docker
+          echo "Docker daemon proxy cleared and restarted"
+          docker info 2>/dev/null | grep -i proxy || true
 
       - name: Setup Go
         run: |

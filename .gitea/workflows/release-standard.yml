@@ -154,19 +154,23 @@ jobs:
             fi
           fi
           # Check if the required Go version is already installed
+          # Handle case where Go binary exists but is broken (container mismatch)
+          NEED_INSTALL=true
           if [ -x /usr/local/go/bin/go ]; then
-            INSTALLED_VERSION=$(/usr/local/go/bin/go version | awk '{print $3}' | sed 's/go//')
-            if [ "${INSTALLED_VERSION}" = "${GO_VER}" ]; then
+            INSTALLED_VERSION=$(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//') || true
+            if [ -n "${INSTALLED_VERSION}" ] && [ "${INSTALLED_VERSION}" = "${GO_VER}" ]; then
               export PATH="/usr/local/go/bin:$PATH"
               echo "/usr/local/go/bin" >> $GITHUB_PATH
               echo "Go ${GO_VER} already installed"
               go version
               go env -w GOPROXY=${GOPROXY}
               exit 0
-            else
+            elif [ -n "${INSTALLED_VERSION}" ]; then
               echo "Go ${INSTALLED_VERSION} installed but need ${GO_VER}, replacing..."
-              rm -rf /usr/local/go
+            else
+              echo "Go binary exists but cannot execute, replacing..."
             fi
+            rm -rf /usr/local/go
           fi
           DOWNLOAD_CMD=""
           command -v curl >/dev/null 2>&1 && DOWNLOAD_CMD="curl -fsSL --connect-timeout 30 --max-time 300 -o"
