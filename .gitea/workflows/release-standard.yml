@@ -76,27 +76,57 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # --- Unix-like platforms (Go 1.24.12) ---
           - goos: linux
             goarch: amd64
             label: linux-amd64
+            go_version: "1.24.12"
           - goos: linux
             goarch: arm64
             label: linux-arm64
+            go_version: "1.24.12"
           - goos: darwin
             goarch: amd64
             label: darwin-amd64
+            go_version: "1.24.12"
           - goos: darwin
             goarch: arm64
             label: darwin-arm64
+            go_version: "1.24.12"
           - goos: freebsd
             goarch: amd64
             label: freebsd-amd64
+            go_version: "1.24.12"
           - goos: freebsd
             goarch: 386
             label: freebsd-386
+            go_version: "1.24.12"
           - goos: freebsd
             goarch: arm64
             label: freebsd-arm64
+            go_version: "1.24.12"
+          # --- Windows (Go 1.24.12) ---
+          - goos: windows
+            goarch: amd64
+            label: windows-amd64
+            go_version: "1.24.12"
+          - goos: windows
+            goarch: 386
+            label: windows-386
+            go_version: "1.24.12"
+          - goos: windows
+            goarch: arm64
+            label: windows-arm64
+            go_version: "1.24.12"
+          # --- Windows Legacy (Go 1.20.14, compatible with Win7/Server 2008) ---
+          - goos: windows
+            goarch: amd64
+            label: windows-amd64-legacy
+            go_version: "1.20.14"
+          - goos: windows
+            goarch: 386
+            label: windows-386-legacy
+            go_version: "1.20.14"
 
     steps:
       - name: Checkout code
@@ -109,6 +139,8 @@ jobs:
           fi
 
       - name: Setup Go
+        env:
+          GO_VER: ${{ matrix.go_version }}
         run: |
           # Ensure curl is available (some self-hosted runners lack it)
           if ! command -v curl >/dev/null 2>&1; then
@@ -121,38 +153,47 @@ jobs:
               yum install -y -q curl
             fi
           fi
+          # Check if the required Go version is already installed
           if [ -x /usr/local/go/bin/go ]; then
-            export PATH="/usr/local/go/bin:$PATH"
-            echo "/usr/local/go/bin" >> $GITHUB_PATH
-            echo "Go already installed at /usr/local/go"
-          else
-            DOWNLOAD_CMD=""
-            command -v curl >/dev/null 2>&1 && DOWNLOAD_CMD="curl -fsSL --connect-timeout 30 --max-time 300 -o"
-            command -v wget >/dev/null 2>&1 && DOWNLOAD_CMD="wget -q -T 300 -O"
-            if [ -z "$DOWNLOAD_CMD" ]; then
-              echo "Error: neither curl nor wget available"
-              exit 1
-            fi
-            GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
-            MIRRORS=(
-              "http://192.168.2.36/${GO_TARBALL}"
-              "https://golang.google.cn/dl/${GO_TARBALL}"
-            )
-            for MIRROR in "${MIRRORS[@]}"; do
-              echo "Downloading from $MIRROR ..."
-              if $DOWNLOAD_CMD "/tmp/${GO_TARBALL}" "$MIRROR"; then
-                break
-              fi
-              echo "Mirror failed: $MIRROR"
-            done
-            if [ -f "/tmp/${GO_TARBALL}" ]; then
-              tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
-              echo "/usr/local/go/bin" >> $GITHUB_PATH
+            INSTALLED_VERSION=$(/usr/local/go/bin/go version | awk '{print $3}' | sed 's/go//')
+            if [ "${INSTALLED_VERSION}" = "${GO_VER}" ]; then
               export PATH="/usr/local/go/bin:$PATH"
+              echo "/usr/local/go/bin" >> $GITHUB_PATH
+              echo "Go ${GO_VER} already installed"
+              go version
+              go env -w GOPROXY=${GOPROXY}
+              exit 0
             else
-              echo "Error: Failed to download Go from all mirrors"
-              exit 1
+              echo "Go ${INSTALLED_VERSION} installed but need ${GO_VER}, replacing..."
+              rm -rf /usr/local/go
             fi
+          fi
+          DOWNLOAD_CMD=""
+          command -v curl >/dev/null 2>&1 && DOWNLOAD_CMD="curl -fsSL --connect-timeout 30 --max-time 300 -o"
+          command -v wget >/dev/null 2>&1 && DOWNLOAD_CMD="wget -q -T 300 -O"
+          if [ -z "$DOWNLOAD_CMD" ]; then
+            echo "Error: neither curl nor wget available"
+            exit 1
+          fi
+          GO_TARBALL="go${GO_VER}.linux-amd64.tar.gz"
+          MIRRORS=(
+            "http://192.168.2.36/${GO_TARBALL}"
+            "https://golang.google.cn/dl/${GO_TARBALL}"
+          )
+          for MIRROR in "${MIRRORS[@]}"; do
+            echo "Downloading from $MIRROR ..."
+            if $DOWNLOAD_CMD "/tmp/${GO_TARBALL}" "$MIRROR"; then
+              break
+            fi
+            echo "Mirror failed: $MIRROR"
+          done
+          if [ -f "/tmp/${GO_TARBALL}" ]; then
+            tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
+            echo "/usr/local/go/bin" >> $GITHUB_PATH
+            export PATH="/usr/local/go/bin:$PATH"
+          else
+            echo "Error: Failed to download Go from all mirrors"
+            exit 1
           fi
           go version
           go env -w GOPROXY=${GOPROXY}
@@ -176,9 +217,15 @@ jobs:
           LABEL: ${{ matrix.label }}
         run: |
           OUTPUT="nssh_${GOOS}_${GOARCH}"
-          [ "${GOOS}" = "windows" ] && OUTPUT="${OUTPUT}.exe"
-          go build -ldflags="-s -w -X main.Version=${VERSION} -X main.CommitID=${COMMIT_ID}" \
-            -trimpath -o "${OUTPUT}" .
+          BUILD_TAGS=""
+          BUILD_FLAGS=""
+          if [ "${GOOS}" = "windows" ]; then
+            OUTPUT="${OUTPUT}.exe"
+            BUILD_TAGS="-tags netgo,osusergo"
+            BUILD_FLAGS="-buildmode=exe"
+          fi
+          go build ${BUILD_TAGS} -ldflags="-s -w -X main.Version=${VERSION} -X main.CommitID=${COMMIT_ID}" \
+            -trimpath ${BUILD_FLAGS} -o "${OUTPUT}" .
 
       - name: Upload to MinIO
         env:
