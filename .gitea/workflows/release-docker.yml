@@ -80,6 +80,26 @@ jobs:
             git checkout "${TAG}"
           fi
 
+      - name: Remove Docker daemon proxy
+        run: |
+          # 旧代理 192.168.2.40:7890 已停用，清除 daemon 侧代理配置
+          OVERRIDE_DIR="/etc/systemd/system/docker.service.d"
+          OVERRIDE_FILE="${OVERRIDE_DIR}/proxy.conf"
+          if [ -f "${OVERRIDE_FILE}" ]; then
+            echo "Found proxy config at ${OVERRIDE_FILE}, removing..."
+            cat "${OVERRIDE_FILE}"
+            sudo rm -f "${OVERRIDE_FILE}"
+            sudo systemctl daemon-reload
+            sudo systemctl restart docker
+            echo "Docker daemon proxy removed and restarted"
+          else
+            echo "No proxy.conf found, checking for other proxy configs..."
+            ls -la "${OVERRIDE_DIR}/" 2>/dev/null || echo "No override dir"
+          fi
+          # 清除 shell 环境中的代理变量，防止 docker CLI 继承
+          unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
+          echo "Proxy environment cleared"
+
       - name: Setup Go
         run: |
           # Ensure curl is available (some self-hosted runners lack it)
