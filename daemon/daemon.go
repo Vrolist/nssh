@@ -180,11 +180,11 @@ func (d *Daemon) handleProcessAction(params map[string]string, action string) st
 		}
 		errorMsg := fmt.Sprintf("Multiple workers found for username '%s':\n", spec.Username)
 		for i, p := range processes {
-			errorMsg += fmt.Sprintf("  %d. %s - %s:%d\n", i+1, p.Username, p.ServerHost, p.ServerPort)
+			errorMsg += fmt.Sprintf("  %d. %s - %s:%d  (remote %d)\n", i+1, p.Username, p.ServerHost, p.ServerPort, p.RemotePort)
 		}
 		errorMsg += "Please specify using:\n"
 		errorMsg += "  - username@all  (all workers)\n"
-		errorMsg += "  - username@server:port  (specific worker)"
+		errorMsg += "  - username@server:port:remote_port  (specific worker)"
 		resp := Response{Success: false, Error: errorMsg}
 		b, _ := json.Marshal(resp)
 		return string(b) + "\n"
@@ -775,11 +775,11 @@ func (d *Daemon) handleGetCommandTransport(params map[string]string) string {
 		}
 		errorMsg := fmt.Sprintf("Multiple workers found for username '%s':\n", spec.Username)
 		for i, p := range processes {
-			errorMsg += fmt.Sprintf("  %d. %s - %s:%d\n", i+1, p.Username, p.ServerHost, p.ServerPort)
+			errorMsg += fmt.Sprintf("  %d. %s - %s:%d  (remote %d)\n", i+1, p.Username, p.ServerHost, p.ServerPort, p.RemotePort)
 		}
 		errorMsg += "Please specify using:\n"
 		errorMsg += "  - username@all  (all workers)\n"
-		errorMsg += "  - username@server:port  (specific worker)"
+		errorMsg += "  - username@server:port:remote_port  (specific worker)"
 		resp := Response{Success: false, Error: errorMsg}
 		b, _ := json.Marshal(resp)
 		return string(b) + "\n"
