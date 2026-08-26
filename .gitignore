@@ -38,7 +38,7 @@ nssh_client
 nssh_unified
 nssh_gui
 nssh-gui
-nssh
+/nssh
 *.zip
 *.rar
 *.tar.gz

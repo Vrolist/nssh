@@ -97,8 +97,10 @@ for entry in "${PLATFORMS[@]}"; do
 
   echo "--- 构建 wheel: ${PLAT} ---"
   cleanup_build_artifacts
+  # setuptools 的 PEP 517 后端只认 --build-option / --global-option 前缀，
+  # 必须用 --build-option=--plat-name=xxx，否则平台标签不生效，所有平台都会打成 py3-none-any
   python3 -m build --wheel --outdir "$WHEEL_DIR" \
-    --config-setting="--plat-name=${PLAT}" "$PY_ROOT"
+    --config-setting="--build-option=--plat-name=${PLAT}" "$PY_ROOT"
 
   rm -f "${PKG_SRC}/bin/nssh"
   BUILT=$((BUILT + 1))
