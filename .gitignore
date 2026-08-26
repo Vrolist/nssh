@@ -48,3 +48,12 @@ frontend/node_modules/*
 gui/frontend/node_modules/*
 
 logs/*
+
+# Debian packaging build artifacts
+debian/files
+debian/*.debhelper
+debian/*.debhelper.log
+debian/*.substvars
+debian/*.dsc
+*.build
+obj-*/
