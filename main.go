@@ -253,7 +253,7 @@ func printUsage() {
 	fmt.Println(fmt.Sprintf("  nssh - SSH Reverse Tunnel Client (NAT traversal)  v%s", Version))
 	fmt.Println("===============================================")
 	fmt.Println("  GitHub:     https://github.com/Vrolist/nssh")
-	fmt.Println("  Developer: buladou")
+	fmt.Println("  Developer:  buladou ( Song Hu )")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  nssh -R <remote_port>:<local_host>:<local_port> [options] user@server")
