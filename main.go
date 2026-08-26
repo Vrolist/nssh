@@ -279,6 +279,12 @@ func printUsage() {
 	fmt.Println("  binary:   download from https://www.neiwangyun.net")
 	fmt.Println("  docker:   docker run --restart=always ghcr.io/vrolist/nssh/nwy/nssh:latest ...")
 	fmt.Println()
+	fmt.Println("Update:")
+	fmt.Println("  npm:      npm update -g @buladou/nssh")
+	fmt.Println("  pip:      pip install -U nssh")
+	fmt.Println("  binary:   re-download from https://www.neiwangyun.net")
+	fmt.Println("  docker:   docker pull ghcr.io/vrolist/nssh/nwy/nssh:latest")
+	fmt.Println()
 	fmt.Println("Platforms: linux (amd64/arm64/arm), darwin (amd64/arm64), windows (amd64), NAS (amd64/arm/arm64)")
 	fmt.Println()
 }
