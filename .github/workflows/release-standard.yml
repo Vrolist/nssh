@@ -160,3 +160,62 @@ jobs:
           printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${NPM_CONFIG_USERCONFIG}"
           chmod 600 "${NPM_CONFIG_USERCONFIG}"
           ./npm/publish.sh "${VERSION}"
+
+  publish-python:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.12'
+
+      - name: Get version info
+        id: version
+        run: |
+          echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          echo "COMMIT_ID=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build binaries for Python (5 platforms)
+        env:
+          GOTOOLCHAIN: local
+          CGO_ENABLED: 0
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          COMMIT_ID: ${{ steps.version.outputs.COMMIT_ID }}
+        run: |
+          set -e
+          mkdir -p dist
+          for p in "darwin:arm64" "darwin:amd64" "windows:amd64" "linux:amd64" "linux:arm64"; do
+            GOOS="${p%%:*}"
+            GOARCH="${p##*:}"
+            OUTPUT="dist/nssh_${GOOS}_${GOARCH}"
+            [ "${GOOS}" = "windows" ] && OUTPUT="${OUTPUT}.exe"
+            GOOS="${GOOS}" GOARCH="${GOARCH}" go build \
+              -ldflags="-s -w -X main.Version=${VERSION} -X main.CommitID=${COMMIT_ID}" \
+              -trimpath -o "${OUTPUT}" .
+          done
+          ls -lh dist/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: |
+          pip install --quiet build twine
+
+      - name: Publish Python packages
+        env:
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -e
+          if [ -z "${TWINE_PASSWORD}" ]; then
+            echo "PYPI_TOKEN not configured, skipping python publish"
+            exit 0
+          fi
+          chmod +x python/python_publish.sh
+          ./python/python_publish.sh "${VERSION}"

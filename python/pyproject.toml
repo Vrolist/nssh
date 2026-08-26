@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nssh"
+version = "0.0.0"   # 发布时由 python_publish.sh 替换为目标版本
+description = "SSH reverse tunnel client - expose local services behind NAT to the internet"
+readme = "./README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = ["ssh", "tunnel", "reverse-tunnel", "nat", "内网穿透"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: Microsoft :: Windows",
+]
+
+[project.scripts]
+nssh = "nssh.cli:main"
+
+[tool.setuptools]
+packages = ["nssh"]
+
+[tool.setuptools.package-data]
+nssh = ["bin/*"]
