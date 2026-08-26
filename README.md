@@ -12,6 +12,24 @@ NSSH is a lightweight SSH reverse tunnel client written in Go. It allows you to 
 - **Cross-platform** — Linux, macOS, Windows, FreeBSD
 - **Minimal Footprint** — small binary size, low memory usage
 
+## Why NSSH?
+
+There are several existing NAT traversal tools. NSSH picks a deliberately different spot on the trade-off curve.
+
+**vs autossh**
+- autossh is a shell wrapper around `ssh` that monitors a keep-alive probe and restarts on failure. NSSH speaks the SSH protocol **natively in Go** — one binary, no `ssh` dependency, no helper probe process.
+- Multi-tunnel lifecycle is built in: `--daemon`, `--list`, `--stop`, `--restart`, `--log` manage many tunnels from one daemon.
+
+**vs frp**
+- frp needs a dedicated `frps` control server plus a `frpc` client. NSSH connects straight to a **standard OpenSSH server (`sshd`)** — if you already manage any SSH host (or a VPS you rent), you can expose a local service with zero extra server-side deployment.
+- There is no bespoke control channel or extra protocol to secure. You reuse your existing SSH auth (password, key), firewall, and audit story.
+- Significantly lighter: no frp-style control/data channel overhead, smaller binary and memory footprint.
+
+**In short**
+- Standard SSH protocol → works with any `sshd`, reuses existing auth/ops.
+- Single static binary, cross-platform, daemon-managed multi-tunnel.
+- No dedicated server component; the "management plane" is a familiar SSH-tool experience instead of a new protocol.
+
 ## Quick Start
 
 ### Build

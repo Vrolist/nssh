@@ -1,0 +1,25 @@
+Source: nssh
+Section: net
+Priority: optional
+Maintainer: buladou <kellyhu12@qq.com>
+Build-Depends: debhelper-compat (= 13), dh-golang, golang-any
+Standards-Version: 4.6.2
+Homepage: https://github.com/Vrolist/nssh
+Vcs-Git: https://github.com/Vrolist/nssh.git
+Vcs-Browser: https://github.com/Vrolist/nssh
+XS-Go-Import-Path: github.com/Vrolist/nssh
+Testsuite: autopkgtest-pkg-go
+
+Package: nssh
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: SSH reverse tunnel client for NAT traversal
+ NSSH is a lightweight SSH reverse tunnel client written in Go. It allows you
+ to expose local services behind NAT or firewalls to the public internet
+ through a standard OpenSSH server (sshd).
+ .
+ It speaks the SSH protocol natively, so no dedicated server component is
+ required: connect straight to any OpenSSH host you already manage. Features
+ include auto-reconnect with a configurable delay, heartbeat keep-alive,
+ a background daemon that manages multiple tunnels, and password or SSH-key
+ authentication.
