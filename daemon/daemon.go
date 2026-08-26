@@ -95,15 +95,16 @@ func validateConfig(config *base_core.Config) error {
 	return nil
 }
 
-func generateProcessKey(username, serverHost string, serverPort int) string {
-	return fmt.Sprintf("%s@%s:%d", username, serverHost, serverPort)
+func generateProcessKey(username, serverHost string, serverPort, remotePort int) string {
+	return fmt.Sprintf("%s@%s:%d:%d", username, serverHost, serverPort, remotePort)
 }
 
 type TargetSpec struct {
-	Username  string
-	Server    string
+	Username   string
+	Server     string
 	ServerPort int
-	Mode      string
+	RemotePort int
+	Mode       string
 }
 
 func parseTargetSpec(target string) TargetSpec {
@@ -115,10 +116,17 @@ func parseTargetSpec(target string) TargetSpec {
 			if parts[1] == "all" {
 				spec.Mode = "all"
 			} else if strings.Contains(parts[1], ":") {
-				hostPort := strings.SplitN(parts[1], ":", 2)
+				hostPort := strings.SplitN(parts[1], ":", 3)
 				spec.Server = hostPort[0]
-				if port, err := strconv.Atoi(hostPort[1]); err == nil {
-					spec.ServerPort = port
+				if len(hostPort) > 1 {
+					if port, err := strconv.Atoi(hostPort[1]); err == nil {
+						spec.ServerPort = port
+					}
+				}
+				if len(hostPort) > 2 {
+					if remotePort, err := strconv.Atoi(hostPort[2]); err == nil {
+						spec.RemotePort = remotePort
+					}
 				}
 			} else {
 				spec.Server = parts[1]
@@ -144,7 +152,8 @@ func (d *Daemon) handleProcessAction(params map[string]string, action string) st
 		for _, p := range m {
 			matchUsername := p.Username == spec.Username
 			matchServer := spec.Server == "" || (p.ServerHost == spec.Server && (spec.ServerPort == 0 || p.ServerPort == spec.ServerPort))
-			if matchUsername && matchServer {
+			matchRemote := spec.RemotePort == 0 || p.RemotePort == spec.RemotePort
+			if matchUsername && matchServer && matchRemote {
 				processes = append(processes, p)
 			}
 		}
@@ -166,7 +175,7 @@ func (d *Daemon) handleProcessAction(params map[string]string, action string) st
 	if len(processes) > 1 {
 		if spec.Server != "" {
 			process := processes[0]
-			key := generateProcessKey(process.Username, process.ServerHost, process.ServerPort)
+			key := generateProcessKey(process.Username, process.ServerHost, process.ServerPort, process.RemotePort)
 			return d.performAction(action, process, key)
 		}
 		errorMsg := fmt.Sprintf("Multiple workers found for username '%s':\n", spec.Username)
@@ -182,7 +191,7 @@ func (d *Daemon) handleProcessAction(params map[string]string, action string) st
 	}
 
 	process := processes[0]
-	key := generateProcessKey(process.Username, process.ServerHost, process.ServerPort)
+	key := generateProcessKey(process.Username, process.ServerHost, process.ServerPort, process.RemotePort)
 	return d.performAction(action, process, key)
 }
 
@@ -497,7 +506,7 @@ func (d *Daemon) handleStartTransport(params map[string]string) string {
 	d.logger.Info("Starting client with parsed parameters: username=%s, server_host=%s, server_port=%d, local_host=%s, local_port=%d, remote_port=%d, password=%s, ssh_key=%s",
 		config.Username, config.ServerHost, config.ServerPort, config.LocalHost, config.LocalPort, config.RemotePort, config.Password, config.SSHKeyPath)
 
-	processKey := generateProcessKey(config.Username, config.ServerHost, config.ServerPort)
+	processKey := generateProcessKey(config.Username, config.ServerHost, config.ServerPort, config.RemotePort)
 
 	result := make(chan *WorkerInfo, 1)
 	d.cmdChan <- func(m map[string]*WorkerInfo) {
@@ -592,7 +601,7 @@ func (d *Daemon) handleRegisterTransport(params map[string]string) string {
 	startTimeStr := params["start_time"]
 	statusChangeTimeStr := params["last_status_change_time"]
 
-	processKey := generateProcessKey(username, serverHost, serverPort)
+	processKey := generateProcessKey(username, serverHost, serverPort, remotePort)
 
 	isNewProcess := false
 	d.cmdChan <- func(m map[string]*WorkerInfo) {
@@ -739,7 +748,8 @@ func (d *Daemon) handleGetCommandTransport(params map[string]string) string {
 		for _, p := range m {
 			matchUsername := p.Username == spec.Username
 			matchServer := spec.Server == "" || (p.ServerHost == spec.Server && (spec.ServerPort == 0 || p.ServerPort == spec.ServerPort))
-			if matchUsername && matchServer {
+			matchRemote := spec.RemotePort == 0 || p.RemotePort == spec.RemotePort
+			if matchUsername && matchServer && matchRemote {
 				processes = append(processes, p)
 			}
 		}
@@ -922,7 +932,7 @@ func CheckWorkerLifetime(worker *WorkerInfo, key string) (bool, string) {
 func (d *Daemon) startWorker(config *base_core.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	workerKey := generateProcessKey(config.Username, config.ServerHost, config.ServerPort)
+	workerKey := generateProcessKey(config.Username, config.ServerHost, config.ServerPort, config.RemotePort)
 
 	d.cmdChan <- func(m map[string]*WorkerInfo) {
 		if existing, exists := m[workerKey]; exists && existing.CancelFunc != nil {
