@@ -22,7 +22,7 @@ classifiers = [
 nssh = "nssh.cli:main"
 
 [tool.setuptools]
-packages = ["nssh"]
+packages = ["nssh", "nssh.bin"]
 
 [tool.setuptools.package-data]
 nssh = ["bin/*"]
