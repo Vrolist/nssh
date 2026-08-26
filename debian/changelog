@@ -1,4 +1,4 @@
-nssh (0.23.6-1) unstable; urgency=medium
+nssh (0.23.6) trixie; urgency=medium
 
   * Initial Debian package.
 

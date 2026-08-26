@@ -2,7 +2,10 @@ Source: nssh
 Section: net
 Priority: optional
 Maintainer: buladou <kellyhu12@qq.com>
-Build-Depends: debhelper-compat (= 13), dh-golang, golang-any
+Build-Depends: debhelper-compat (= 13), dh-golang, golang-any,
+ golang-github-rs-zerolog-dev, golang-golang-x-crypto-dev,
+ golang-github-spf13-pflag-dev, golang-golang-x-sys-dev,
+ golang-github-mattn-go-colorable-dev, golang-github-mattn-go-isatty-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/Vrolist/nssh
 Vcs-Git: https://github.com/Vrolist/nssh.git

@@ -1,0 +1,63 @@
+.TH NSSH 1 "August 2026" "nssh 0.23.6" "User Commands"
+.SH NAME
+nssh \- SSH reverse tunnel client for NAT traversal
+.SH SYNOPSIS
+.B nssh
+[\fIOPTIONS\fR] \fIuser@server\fR
+.br
+.B nssh
+\-R \fIremote_port\fR:\fIlocal_host\fR:\fIlocal_port\fR [\fIOPTIONS\fR] \fIuser@server\fR
+.SH DESCRIPTION
+.B nssh
+is a lightweight SSH reverse tunnel client written in Go. It exposes local
+services behind NAT or firewalls to the public internet through a standard
+OpenSSH server (sshd), speaking the SSH protocol natively without requiring a
+dedicated server component.
+.PP
+It supports auto-reconnect with a configurable delay, heartbeat keep-alive,
+password or SSH-key authentication, and a background daemon that manages
+multiple tunnels.
+.SH OPTIONS
+.TP
+.BR \-R ", " \-\-remote " " \fIremote_port\fR:\fIlocal_host\fR:\fIlocal_port\fR
+Set up a reverse tunnel from \fIremote_port\fR on the server to
+\fIlocal_host\fR:\fIlocal_port\fR on the client.
+.TP
+.BR \-p ", " \-\-port " " \fIPORT\fR
+SSH server port (default 20022).
+.TP
+.BR \-P ", " \-\-passwd " " \fIPASSWORD\fR
+SSH password for authentication.
+.TP
+.BR \-i ", " \-\-identity " " \fIFILE\fR
+SSH private key file for authentication.
+.TP
+.BR \-r ", " \-\-reconnect " " \fISECONDS\fR
+Reconnect delay after a disconnect (default 30).
+.TP
+.B \-\-daemon
+Run as a background daemon with automatic reconnect.
+.TP
+.B \-\-list
+List all tunnels managed by the daemon.
+.TP
+.BR \-\-stop " " \fIuser\fR
+Stop a tunnel managed by the daemon.
+.TP
+.B \-\-stop\-all
+Stop all tunnels managed by the daemon.
+.TP
+.BR \-\-restart " " \fIuser\fR
+Restart a tunnel managed by the daemon.
+.TP
+.BR \-v ", " \-\-version
+Show version information.
+.SH EXAMPLES
+.PP
+Expose local port 80 to the public port 8080 on the server:
+.PP
+.RS
+nssh \-R 8080:localhost:80 user@example.com \-p 2122 \-P password
+.RE
+.SH AUTHOR
+buladou <kellyhu12@qq.com>
