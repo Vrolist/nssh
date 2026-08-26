@@ -152,6 +152,7 @@ jobs:
         run: |
           docker buildx imagetools create \
             --tag ${{ env.IMAGE }}:${{ env.VERSION }} \
+            --tag ${{ env.IMAGE }}:latest \
             ${{ env.IMAGE }}:amd64 \
             ${{ env.IMAGE }}:arm64
-          echo "Pushed ${{ env.IMAGE }}:${{ env.VERSION }} (amd64+arm64)"
+          echo "Pushed ${{ env.IMAGE }}:${{ env.VERSION }} and :latest (amd64+arm64)"
