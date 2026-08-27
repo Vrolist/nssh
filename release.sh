@@ -75,16 +75,29 @@ else
     echo ""
     echo "Select release version:"
     echo ""
+
+    # Debian changelog 里的版本作为推荐值（debian-1-vm.sh dch 写入的）
+    DEB_VERSION=$(sed -n 's/^nssh (\([^)-]*\)).*/\1/p' debian/changelog | head -1)
+    CHOICE_DEB=""
+    if [ -n "$DEB_VERSION" ] && [ "$DEB_VERSION" != "$CURRENT_VERSION" ]; then
+        echo "  0) v${DEB_VERSION}  (from debian/changelog — recommended)"
+    fi
     echo "  1) v${PATCH_VER}  (patch - bug fixes)"
     echo "  2) v${MINOR_VER}  (minor - new features)"
     echo "  3) v${MAJOR_VER}  (major - breaking changes)"
     echo "  4) Custom version"
-    echo "  0) Cancel"
+    echo "  q) Cancel"
     echo ""
 
-    read -p "Enter choice [1-4, 0]: " CHOICE
+    read -p "Enter choice: " CHOICE
 
     case $CHOICE in
+        0)
+            if [ -z "$DEB_VERSION" ]; then
+                echo "Invalid choice"
+                exit 1
+            fi
+            NEW_VERSION="$DEB_VERSION" ;;
         1) NEW_VERSION="$PATCH_VER" ;;
         2) NEW_VERSION="$MINOR_VER" ;;
         3) NEW_VERSION="$MAJOR_VER" ;;
@@ -95,7 +108,7 @@ else
                 exit 1
             fi
             ;;
-        0) echo "Cancelled"; exit 0 ;;
+        q|Q) echo "Cancelled"; exit 0 ;;
         *) echo "Invalid choice"; exit 1 ;;
     esac
 
