@@ -1,0 +1,12 @@
+---
+# Salsa CI: runs the official Debian packaging checks on every push.
+# This mirrors the sbuild + lintian + pbuilder + autopkgtest checks done
+# locally, but on Debian's own infrastructure.
+include:
+  - project: 'salsa-ci-team/pipeline'
+    file:
+      - '/templates/debian.yml'
+
+variables:
+  SALSA_CI_DISABLE_APTLY: 1
+  SALSA_CI_DISABLE_PIUPARTS: 1
