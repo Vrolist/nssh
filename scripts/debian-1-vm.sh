@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # Debian 打包发版脚本（第 1 步，VM 端） —— 在 Debian 13 VM 的 /root/nssh 里执行。
-# 用法: ./scripts/debian-1-vm.sh <version> [--full]
-#   <version>  与上游 tag 对齐的版本号，如 0.27.0
+# 用法: ./scripts/debian-1-vm.sh [version] [--full]
+#   version    与上游 tag 对齐的版本号。省略时从最新 git tag 推荐候选
+#              （与 release.sh 相同的 patch/minor/major 递增逻辑）
 #   --full     跑全量验证（sbuild/lintian/pbuilder/autopkgtest），
 #              默认只跑 sbuild+lintian（足够覆盖纯版本号变更）
 set -euo pipefail
 
-VERSION="${1:?用法: $0 <version> [--full]}"
-FULL="${2:-}"
+VERSION=""
+FULL=""
+for arg in "$@"; do
+    case "$arg" in
+        --full) FULL="--full" ;;
+        *) VERSION="$arg" ;;
+    esac
+done
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CHROOT="trixie-amd64-sbuild"
@@ -18,6 +25,47 @@ cd "$REPO_DIR"
 
 echo "==> [1/5] 拉取 gitea 最新代码"
 git pull --ff-only
+
+if [ -z "$VERSION" ]; then
+    # 从最新 tag 推荐候选版本（tag 是"上一个"，所以候选是其递增版）
+    CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+    if [ -z "$CURRENT_TAG" ]; then
+        echo "错误: 无 git tag 且未传版本号。用法: $0 <version>"
+        exit 1
+    fi
+    IFS='.' read -r MAJOR MINOR PATCH <<< "${CURRENT_TAG#v}"
+    PATCH_VER="${MAJOR}.${MINOR}.$((PATCH + 1))"
+    MINOR_VER="${MAJOR}.$((MINOR + 1)).0"
+    MAJOR_VER="$((MAJOR + 1)).0.0"
+    # changelog 若已 bump 且领先于 tag，作为推荐项
+    DEB_VERSION=$(sed -n 's/^nssh (\([^)-]*\)).*/\1/p' debian/changelog | head -1)
+    CHOICE_DEB=""
+    if [ -n "$DEB_VERSION" ] && [ "v${DEB_VERSION}" != "$CURRENT_TAG" ]; then
+        CHOICE_DEB=0
+        echo ""
+        echo "  0) ${DEB_VERSION}  (from debian/changelog — recommended)"
+    fi
+    echo "当前 tag: ${CURRENT_TAG}"
+    echo ""
+    echo "  1) ${PATCH_VER}  (patch - bug fixes)"
+    echo "  2) ${MINOR_VER}  (minor - new features)"
+    echo "  3) ${MAJOR_VER}  (major - breaking changes)"
+    echo "  4) 自定义版本号"
+    echo "  q) 取消"
+    echo ""
+    read -p "选择 Debian 版本: " CHOICE
+    case "${CHOICE:-x}" in
+        0) VERSION="$DEB_VERSION" ;;
+        1) VERSION="$PATCH_VER" ;;
+        2) VERSION="$MINOR_VER" ;;
+        3) VERSION="$MAJOR_VER" ;;
+        4)
+            read -p "输入版本号 (如 0.28.0): " VERSION
+            [ -n "$VERSION" ] || { echo "版本不能为空"; exit 1; } ;;
+        q|Q) echo "已取消"; exit 0 ;;
+        *) echo "无效选择"; exit 1 ;;
+    esac
+fi
 
 echo "==> [2/5] 更新 debian/changelog 到 ${VERSION}"
 dch -v "${VERSION}" "new upstream release"
