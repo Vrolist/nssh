@@ -28,8 +28,14 @@ MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian/"
 
 cd "$REPO_DIR"
 
+# 校验是 nssh 仓库（防止误跑在别的目录/仓库副本）
+[ -f debian/changelog ] && [ -f main.go ] || {
+    echo "错误: $REPO_DIR 不是 nssh 仓库根目录"
+    exit 1
+}
+
 echo "==> [1/5] 拉取 gitea 最新代码"
-git pull --ff-only
+git pull --ff-only gitea main
 
 if [ -z "$VERSION" ]; then
     # 从最新 tag 推荐候选版本（tag 是"上一个"，所以候选是其递增版）
@@ -120,7 +126,7 @@ fi
 echo "==> [5/5] 提交并推送 gitea"
 git add debian/changelog
 git commit -m "debian: bump to ${VERSION}"
-git push gitea main 2>/dev/null || git push origin main
+git push gitea main
 
 echo ""
 echo "完成。接下来在本地 mac 执行: ./scripts/debian-2-salsa.sh"

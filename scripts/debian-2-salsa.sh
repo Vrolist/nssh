@@ -23,5 +23,5 @@ if [ "${1:-}" = "--push-salsa" ]; then
     git push salsa main
 else
     echo ""
-    echo "未推送 salsa。改了 debian/ 或源码时执行: ./scripts/sync-remotes.sh --push-salsa"
+    echo "未推送 salsa。改了 debian/ 或源码时执行: ./scripts/debian-2-salsa.sh --push-salsa"
 fi
