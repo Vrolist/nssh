@@ -35,7 +35,18 @@ cd "$REPO_DIR"
 }
 
 echo "==> [1/5] 拉取 gitea 最新代码"
-git pull --ff-only gitea main
+# Gitea 远端名在 mac 上叫 gitea，在 VM 里通常叫 origin，自动探测
+GIT_REMOTE=""
+for r in gitea origin; do
+    if git remote get-url "$r" >/dev/null 2>&1 \
+        && git remote get-url "$r" | grep -q '192.168.2.27\|gitea'; then
+        GIT_REMOTE="$r"
+        break
+    fi
+done
+[ -n "$GIT_REMOTE" ] || { echo "错误: 未找到 gitea 远端"; git remote -v; exit 1; }
+echo "    使用远端: ${GIT_REMOTE}"
+git pull --ff-only "${GIT_REMOTE}" main
 
 if [ -z "$VERSION" ]; then
     # 从最新 tag 推荐候选版本（tag 是"上一个"，所以候选是其递增版）
@@ -126,7 +137,7 @@ fi
 echo "==> [5/5] 提交并推送 gitea"
 git add debian/changelog
 git commit -m "debian: bump to ${VERSION}"
-git push gitea main
+git push "${GIT_REMOTE}" main
 
 echo ""
 echo "完成。接下来在本地 mac 执行: ./scripts/debian-2-salsa.sh"
