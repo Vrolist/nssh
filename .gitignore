@@ -56,4 +56,7 @@ debian/*.debhelper.log
 debian/*.substvars
 debian/*.dsc
 *.build
+*.buildinfo
+*.changes
+*.deb
 obj-*/
