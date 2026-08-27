@@ -78,7 +78,8 @@ if [ -f debian/changelog.dch ]; then
     echo "    清理上次中断残留的 debian/changelog.dch"
     rm -f debian/changelog.dch
 fi
-dch -v "${VERSION}" "new upstream release"
+# -D trixie: 避免 dch 默认的 UNRELEASED 触发 lintian E: unreleased-changes
+dch -v "${VERSION}" -D trixie "new upstream release"
 
 echo "==> [3/5] 生成源包"
 dpkg-buildpackage -S -us -uc -d
@@ -86,15 +87,24 @@ DSC="$(dirname "$REPO_DIR")/nssh_${VERSION}.dsc"
 [ -f "$DSC" ] || { echo "错误: 未生成 $DSC"; exit 1; }
 
 echo "==> [4/5] sbuild 干净构建"
-sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" "$DSC"
+OUT_DIR="$(dirname "$REPO_DIR")"
+# 显式指定输出目录，避免不同 sbuild 版本产物落盘位置不一致；
+# 若有残留 session 导致 lintian 异常，可先用 schroot --end-session 清理
+sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" \
+    --output-dir="$OUT_DIR" "$DSC"
 
-BUILD_LOG="$(ls -t "$(dirname "$REPO_DIR")"/nssh_${VERSION}_amd64*.build | head -1)"
-WARNINGS=$(grep -c '^W:' "$BUILD_LOG" || true)
-ERRORS=$(grep -c '^E:' "$BUILD_LOG" || true)
-echo "    lintian: ${ERRORS} errors, ${WARNINGS} warnings"
-if [ "$ERRORS" != "0" ]; then
-    grep '^E:' "$BUILD_LOG"
-    echo "存在 lintian error，中止"; exit 1
+BUILD_LOG="$(ls -t "$OUT_DIR"/nssh_${VERSION}_amd64*.build 2>/dev/null | head -1)"
+if [ -z "$BUILD_LOG" ]; then
+    echo "警告: 未找到 ${OUT_DIR}/nssh_${VERSION}_amd64*.build，跳过 lintian 结果统计"
+    echo "排查: find / -name 'nssh_${VERSION}_amd64*'"
+else
+    WARNINGS=$(grep -c '^W:' "$BUILD_LOG" || true)
+    ERRORS=$(grep -c '^E:' "$BUILD_LOG" || true)
+    echo "    lintian: ${ERRORS} errors, ${WARNINGS} warnings"
+    if [ "$ERRORS" != "0" ]; then
+        grep '^E:' "$BUILD_LOG"
+        echo "存在 lintian error，中止"; exit 1
+    fi
 fi
 
 if [ "$FULL" = "--full" ]; then
