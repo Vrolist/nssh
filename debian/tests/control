@@ -1,3 +1,0 @@
-Tests: run-tests
-Depends: golang-any
-Restrictions: allow-stderr
