@@ -73,6 +73,11 @@ if [ -z "$VERSION" ]; then
 fi
 
 echo "==> [2/5] 更新 debian/changelog 到 ${VERSION}"
+# 上次运行中断（如 Ctrl+C）会残留 dch 备份文件，导致下次 dch 拒绝执行
+if [ -f debian/changelog.dch ]; then
+    echo "    清理上次中断残留的 debian/changelog.dch"
+    rm -f debian/changelog.dch
+fi
 dch -v "${VERSION}" "new upstream release"
 
 echo "==> [3/5] 生成源包"
