@@ -105,16 +105,21 @@ DSC="$(dirname "$REPO_DIR")/nssh_${VERSION}.dsc"
 
 echo "==> [4/5] sbuild 干净构建"
 OUT_DIR="$(dirname "$REPO_DIR")"
-# 显式指定输出目录，避免不同 sbuild 版本产物落盘位置不一致；
-# 若有残留 session 导致 lintian 异常，可先用 schroot --end-session 清理
-sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" \
-    --output-dir="$OUT_DIR" "$DSC"
+# 新版 sbuild 支持 --output-dir 指定产物目录；旧版不认识该选项则不带选项重跑
+if ! sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" \
+    --output-dir="$OUT_DIR" "$DSC"; then
+    echo "    当前 sbuild 不支持 --output-dir，使用默认输出重跑"
+    sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" "$DSC"
+fi
 
-BUILD_LOG="$(ls -t "$OUT_DIR"/nssh_${VERSION}_amd64*.build 2>/dev/null | head -1)"
+# 不同 sbuild 版本产物落盘位置不同（dsc 所在目录 或 当前目录），两处都找
+BUILD_LOG="$(ls -t "$OUT_DIR"/nssh_${VERSION}_amd64*.build \
+    "$REPO_DIR"/nssh_${VERSION}_amd64*.build 2>/dev/null | head -1)"
 if [ -z "$BUILD_LOG" ]; then
-    echo "警告: 未找到 ${OUT_DIR}/nssh_${VERSION}_amd64*.build，跳过 lintian 结果统计"
+    echo "警告: 未找到 nssh_${VERSION}_amd64*.build，跳过 lintian 结果统计"
     echo "排查: find / -name 'nssh_${VERSION}_amd64*'"
 else
+    echo "    构建日志: ${BUILD_LOG}"
     WARNINGS=$(grep -c '^W:' "$BUILD_LOG" || true)
     ERRORS=$(grep -c '^E:' "$BUILD_LOG" || true)
     echo "    lintian: ${ERRORS} errors, ${WARNINGS} warnings"
