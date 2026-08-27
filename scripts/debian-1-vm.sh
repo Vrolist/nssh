@@ -22,6 +22,7 @@ for arg in "$@"; do
 done
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+OUT_DIR="$(dirname "$REPO_DIR")"
 CHROOT="trixie-amd64-sbuild"
 PBUILDER_BASE="/var/cache/pbuilder/base-trixie.tgz"
 MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian/"
@@ -34,8 +35,8 @@ cd "$REPO_DIR"
     exit 1
 }
 
-echo "==> [1/5] 拉取 gitea 最新代码"
-# Gitea 远端名在 mac 上叫 gitea，在 VM 里通常叫 origin，自动探测
+# 自动探测 gitea 远端名：mac 上叫 gitea，VM 里通常叫 origin。
+# 判定标准是 URL 含内网 Gitea 地址或 'gitea' 字样，避免误用 github/salsa 远端
 GIT_REMOTE=""
 for r in gitea origin; do
     if git remote get-url "$r" >/dev/null 2>&1 \
@@ -45,7 +46,8 @@ for r in gitea origin; do
     fi
 done
 [ -n "$GIT_REMOTE" ] || { echo "错误: 未找到 gitea 远端"; git remote -v; exit 1; }
-echo "    使用远端: ${GIT_REMOTE}"
+
+echo "==> [1/5] 拉取 ${GIT_REMOTE} 最新代码"
 git pull --ff-only "${GIT_REMOTE}" main
 
 if [ -z "$VERSION" ]; then
@@ -100,21 +102,23 @@ dch -v "${VERSION}" -D trixie "new upstream release"
 
 echo "==> [3/5] 生成源包"
 dpkg-buildpackage -S -us -uc -d
-DSC="$(dirname "$REPO_DIR")/nssh_${VERSION}.dsc"
+DSC="${OUT_DIR}/nssh_${VERSION}.dsc"
 [ -f "$DSC" ] || { echo "错误: 未生成 $DSC"; exit 1; }
 
 echo "==> [4/5] sbuild 干净构建"
-OUT_DIR="$(dirname "$REPO_DIR")"
-# 新版 sbuild 支持 --output-dir 指定产物目录；旧版不认识该选项则不带选项重跑
-if ! sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" \
-    --output-dir="$OUT_DIR" "$DSC"; then
-    echo "    当前 sbuild 不支持 --output-dir，使用默认输出重跑"
+# 新版 sbuild 支持 --output-dir 指定产物目录；旧版默认产物落盘到当前目录（仓库内），
+# 构建后统一清理散落产物。提前探测选项支持，避免真失败时误判重跑
+if sbuild --help 2>&1 | grep -q -- '--output-dir'; then
+    sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" \
+        --output-dir="$OUT_DIR" "$DSC"
+else
+    echo "    当前 sbuild 不支持 --output-dir，产物将写入仓库目录（构建后自动清理）"
     sbuild --arch=amd64 --dist=trixie --chroot="$CHROOT" "$DSC"
 fi
 
 # 不同 sbuild 版本产物落盘位置不同（dsc 所在目录 或 当前目录），两处都找
-BUILD_LOG="$(ls -t "$OUT_DIR"/nssh_${VERSION}_amd64*.build \
-    "$REPO_DIR"/nssh_${VERSION}_amd64*.build 2>/dev/null | head -1)"
+BUILD_LOG="$(ls -t "${OUT_DIR}"/nssh_${VERSION}_amd64*.build \
+    "${REPO_DIR}"/nssh_${VERSION}_amd64*.build 2>/dev/null | head -1 || true)"
 if [ -z "$BUILD_LOG" ]; then
     echo "警告: 未找到 nssh_${VERSION}_amd64*.build，跳过 lintian 结果统计"
     echo "排查: find / -name 'nssh_${VERSION}_amd64*'"
@@ -125,8 +129,25 @@ else
     echo "    lintian: ${ERRORS} errors, ${WARNINGS} warnings"
     if [ "$ERRORS" != "0" ]; then
         grep '^E:' "$BUILD_LOG"
-        echo "存在 lintian error，中止"; exit 1
+        echo "存在 lintian error，中止"
+        exit 1
     fi
+fi
+
+# 清理仓库目录内散落的二进制产物（旧版 sbuild 行为），保持 git 工作区干净；
+# 正式产物统一保留在 $OUT_DIR（/root）
+shopt -s nullglob
+CLEANUP_COUNT=0
+for f in "$REPO_DIR"/nssh_${VERSION}_*.deb \
+         "$REPO_DIR"/nssh_${VERSION}_*.buildinfo \
+         "$REPO_DIR"/nssh_${VERSION}_*.changes \
+         "$REPO_DIR"/nssh_${VERSION}_*-*.build; do
+    rm -f "$f"
+    CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
+done
+shopt -u nullglob
+if [ "$CLEANUP_COUNT" -gt 0 ]; then
+    echo "    已清理仓库内散落产物: ${CLEANUP_COUNT} 个文件"
 fi
 
 if [ "$FULL" = "--full" ]; then
@@ -139,10 +160,10 @@ else
     echo "==> [跳过 pbuilder/autopkgtest（加 --full 跑全量）]"
 fi
 
-echo "==> [5/5] 提交并推送 gitea"
+echo "==> [5/5] 提交并推送 ${GIT_REMOTE}"
 git add debian/changelog
 git commit -m "debian: bump to ${VERSION}"
 git push "${GIT_REMOTE}" main
 
 echo ""
-echo "完成。接下来在本地 mac 执行: ./scripts/debian-2-salsa.sh"
+echo "完成。接下来在本地 mac 执行: ./scripts/debian-2-salsa.sh --push-salsa"
