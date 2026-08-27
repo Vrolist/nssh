@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Debian 打包发版脚本 —— 在 Debian 13 VM 的 /root/nssh 里执行。
-# 用法: ./scripts/debian-release.sh <version> [--full]
+# Debian 打包发版脚本（第 1 步，VM 端） —— 在 Debian 13 VM 的 /root/nssh 里执行。
+# 用法: ./scripts/debian-1-vm.sh <version> [--full]
 #   <version>  与上游 tag 对齐的版本号，如 0.27.0
 #   --full     跑全量验证（sbuild/lintian/pbuilder/autopkgtest），
 #              默认只跑 sbuild+lintian（足够覆盖纯版本号变更）
@@ -55,4 +55,4 @@ git commit -m "debian: bump to ${VERSION}"
 git push gitea main 2>/dev/null || git push origin main
 
 echo ""
-echo "完成。接下来在本地 mac 执行: ./scripts/sync-remotes.sh"
+echo "完成。接下来在本地 mac 执行: ./scripts/debian-release-2-salsa.sh"
