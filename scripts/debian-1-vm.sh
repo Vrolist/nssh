@@ -7,6 +7,11 @@
 #              默认只跑 sbuild+lintian（足够覆盖纯版本号变更）
 set -euo pipefail
 
+# dch 维护者身份（与 GPG/Salsa 一致）+ 消除 locale/DEBEMAIL 警告
+export LC_ALL=C.UTF-8
+export DEBFULLNAME="${DEBFULLNAME:-buladou (SongHu)}"
+export DEBEMAIL="${DEBEMAIL:-kellyhu258@gmail.com}"
+
 VERSION=""
 FULL=""
 for arg in "$@"; do
