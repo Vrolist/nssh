@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Debian 发版同步脚本（第 2 步，本地 mac） —— 在本地 mac 的 nssh 仓库执行。
 # 用途: debian-1-vm.sh 推完 gitea 后，把改动拉回本地并同步到 github + salsa。
-# 用法: ./scripts/debian-release-2-salsa.sh [--push-salsa]
+# 用法: ./scripts/debian-2-salsa.sh [--push-salsa]
 set -euo pipefail
 
 cd "$(cd "$(dirname "$0")/.." && pwd)"

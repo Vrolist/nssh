@@ -55,4 +55,4 @@ git commit -m "debian: bump to ${VERSION}"
 git push gitea main 2>/dev/null || git push origin main
 
 echo ""
-echo "完成。接下来在本地 mac 执行: ./scripts/debian-release-2-salsa.sh"
+echo "完成。接下来在本地 mac 执行: ./scripts/debian-2-salsa.sh"
