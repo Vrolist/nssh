@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Debian 发版同步脚本（第 2 步，本地 mac） —— 在本地 mac 的 nssh 仓库执行。
 # 用途: debian-1-vm.sh 推完 gitea 后，把改动拉回本地并同步到 github + salsa。
-# 用法: ./scripts/debian-2-salsa.sh [--push-salsa]
-#   --push-salsa  额外推送 salsa（触发 Debian 官方 CI）
+# 用法: ./scripts/debian-2-salsa.sh [--push-salsa|--no-salsa]
+#   默认交互式询问是否推送 salsa；--push-salsa 跳过询问直接推；
+#   --no-salsa 跳过询问直接不推（适合纯脚本同步场景）
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PUSH_SALSA=""
+SALSA_MODE="ask"
 
 for arg in "$@"; do
     case "$arg" in
-        --push-salsa) PUSH_SALSA=1 ;;
-        *) echo "未知参数: $arg。用法: $0 [--push-salsa]"; exit 1 ;;
+        --push-salsa) SALSA_MODE="yes" ;;
+        --no-salsa)   SALSA_MODE="no" ;;
+        *) echo "未知参数: $arg。用法: $0 [--push-salsa|--no-salsa]"; exit 1 ;;
     esac
 done
 
@@ -61,14 +63,24 @@ fi
 echo "==> [2/2] 推送 github (${GITHUB_REMOTE})"
 git push "${GITHUB_REMOTE}" main
 
-if [ -n "$PUSH_SALSA" ]; then
-    # 推 salsa 前确认 debian 版本与 tag 的对应关系，防误推
-    DEB_VERSION=$(sed -n 's/^nssh (\([^)-]*\)).*/\1/p' debian/changelog | head -1)
-    echo "==> 推送 salsa（触发 Debian 官方 CI），当前 debian/changelog 版本: ${DEB_VERSION}"
+DEB_VERSION=$(sed -n 's/^nssh (\([^)-]*\)).*/\1/p' debian/changelog | head -1)
+
+if [ "$SALSA_MODE" = "ask" ]; then
+    echo ""
+    echo "是否推送 salsa？(触发 Debian 官方 CI)，当前 debian/changelog 版本: ${DEB_VERSION}"
+    read -p "[y/N]: " ANSWER
+    case "${ANSWER:-n}" in
+        y|Y) SALSA_MODE="yes" ;;
+        *)   SALSA_MODE="no" ;;
+    esac
+fi
+
+if [ "$SALSA_MODE" = "yes" ]; then
+    echo "==> 推送 salsa（触发 Debian 官方 CI），版本: ${DEB_VERSION}"
     git push salsa main
 else
     echo ""
-    echo "未推送 salsa。改了 debian/ 或源码时执行: ./scripts/debian-2-salsa.sh --push-salsa"
+    echo "未推送 salsa。之后需要时可执行: ./scripts/debian-2-salsa.sh --push-salsa"
 fi
 
 echo ""
