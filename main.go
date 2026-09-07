@@ -58,6 +58,7 @@ func main() {
 	daemonMode := pflag.Bool("daemon", false, "Run as daemon")
 	daemonInnerMode := pflag.Bool("daemon-inner", false, "Internal: run daemon in foreground")
 	listCmd := pflag.Bool("list", false, "List processes (no value for all, or specify username as argument)")
+	listJSONCmd := pflag.Bool("list-json", false, "List all processes in JSON format (for automation)")
 	restartCmd := pflag.String("restart", "", "Restart process by username")
 	stopCmd := pflag.String("stop", "", "Stop process by username")
 	logCmd := pflag.String("log", "", "View log by username")
@@ -168,6 +169,11 @@ func main() {
 		fmt.Printf("nssh version: %s\n", Version)
 		fmt.Printf("commit: %s\n", CommitID)
 		os.Exit(0)
+	}
+
+	if *listJSONCmd {
+		sendManagementCommandJSON(daemon.CMD_LIST, "")
+		return
 	}
 
 	if *listCmd {
@@ -629,6 +635,46 @@ func sendManagementCommand(cmd int, username string) {
 	default:
 		fmt.Printf("Success: %v\n", resp.Data)
 	}
+}
+
+// sendManagementCommandJSON 发送管理命令并以原始JSON输出结果（供自动化工具解析）
+func sendManagementCommandJSON(cmd int, username string) {
+	transport := daemon.NewTransport()
+	params := map[string]string{"username": username}
+	timestamp := time.Now().Unix()
+
+	respStr, err := transport.SendCommand(cmd, params, timestamp)
+	if err != nil {
+		fmt.Printf("{\"success\": false, \"error\": %s}\n", jsonQuote(err.Error()))
+		os.Exit(1)
+	}
+
+	var resp daemon.Response
+	if err := json.Unmarshal([]byte(respStr), &resp); err != nil {
+		fmt.Printf("{\"success\": false, \"error\": %s}\n", jsonQuote(err.Error()))
+		os.Exit(1)
+	}
+
+	if !resp.Success {
+		fmt.Printf("{\"success\": false, \"error\": %s}\n", jsonQuote(resp.Error))
+		os.Exit(1)
+	}
+
+	data, err := json.Marshal(resp.Data)
+	if err != nil {
+		fmt.Printf("{\"success\": false, \"error\": %s}\n", jsonQuote(err.Error()))
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
+
+// jsonQuote 将字符串转义为合法JSON字符串字面量（含引号）
+func jsonQuote(s string) string {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return "\"unknown error\""
+	}
+	return string(data)
 }
 
 func formatDuration(d time.Duration) string {
