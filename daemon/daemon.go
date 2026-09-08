@@ -447,6 +447,26 @@ func (d *Daemon) Run() {
 	}
 }
 
+// monitorAgent 生命周期绑定监控：检测到托管 agent 进程退出后，停止所有隧道并退出 daemon。
+// 仅对 nssh-agent 启动的 daemon 生效（环境变量 NSSH_AGENT_PID 注入）。
+func (d *Daemon) monitorAgent(agentPID int) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if !agentProcessAlive(agentPID) {
+				d.logger.Warn("nssh-agent (PID %d) 已退出，停止所有隧道并退出 daemon", agentPID)
+				d.shutdown()
+				removePIDFile()
+				os.Exit(0)
+			}
+		case <-d.stopChan:
+			return
+		}
+	}
+}
+
 func (d *Daemon) handleTransportCommand(cmd int, params map[string]string, key string, timestamp int64) string {
 	switch cmd {
 	case CMD_START:
