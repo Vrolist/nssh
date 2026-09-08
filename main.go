@@ -128,7 +128,13 @@ func main() {
 		}
 
 		startDaemonBackground()
-		time.Sleep(2 * time.Second)
+		// 等待 daemon 就绪后再发送启动命令（轮询替代固定休眠，缩小双 daemon 竞态窗口）
+		for i := 0; i < 50; i++ {
+			if base_core.IsDaemonRunning() {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		sendStartCommand(config)
 		return
 	}

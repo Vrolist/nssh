@@ -6,6 +6,7 @@ package daemon
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 )
@@ -24,7 +25,18 @@ func NewTransport() Transport {
 }
 
 func (t *UnixTransport) StartServer(handler func(int, map[string]string, string, int64) string) error {
-	os.Remove(SocketPath)
+	// 单例守卫（修复双 daemon）：
+	//   - socket 已存在且可连接 → 已有活跃 daemon，绝不抢占其 socket，直接报错让本进程退出
+	//   - socket 存在但不可连接 → 死 socket（进程已退出的残留文件），清理后重新绑定
+	//   - socket 不存在 → 直接绑定
+	// 竞态兜底：即便两个 daemon 同时进入，net.Listen 也只有一个成功，另一个报 EADDRINUSE 退出
+	if _, err := os.Stat(SocketPath); err == nil {
+		if conn, err := net.Dial("unix", SocketPath); err == nil {
+			conn.Close()
+			return fmt.Errorf("daemon already running on %s", SocketPath)
+		}
+		os.Remove(SocketPath)
+	}
 
 	listener, err := net.Listen("unix", SocketPath)
 	if err != nil {
