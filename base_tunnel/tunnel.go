@@ -41,6 +41,23 @@ type ChannelHandler struct {
 // 总计: 约 30-50 bytes/实例 (不含共享的StatsManager)
 // 生命周期: 每次SSH连接时创建，连接断开后释放
 
+// sendKeepaliveWithTimeout 发送 keepalive 并带超时保护。
+// TCP 半开（网络静默断开，无 FIN/RST）时 SendRequest 会阻塞在内核重传上长达数分钟，
+// 包一层超时可以让客户端尽快判定断线并进入重连流程，缩短隧道不可用窗口。
+func sendKeepaliveWithTimeout(client *ssh.Client, timeout time.Duration) error {
+	reqDone := make(chan error, 1)
+	go func() {
+		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+		reqDone <- err
+	}()
+	select {
+	case err := <-reqDone:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("keepalive timeout after %v", timeout)
+	}
+}
+
 func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManager *base_core.StatsManager) error {
 	logger := base_core.GetLogger()
 
@@ -78,7 +95,8 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 
 	serverAddr := fmt.Sprintf("%s:%d", config.ServerHost, config.ServerPort)
 
-	dialer := &net.Dialer{}
+	// TCP 层 keepalive：OS 默认探测间隔太长（约 2 小时），显式 30s 尽快发现半开连接
+	dialer := &net.Dialer{KeepAlive: 30 * time.Second}
 	tcpConn, err := dialer.Dial("tcp", serverAddr)
 	if err != nil {
 		statsManager.RecordFailure()
@@ -188,46 +206,51 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 					return
 				}
 
-				localAddr := fmt.Sprintf("%s:%d", channelHandler.localHost, channelHandler.localPort)
-				localConn, err := net.Dial("tcp", localAddr)
-				if err != nil {
-					logger.Error("Failed to connect to local %s: %v", localAddr, err)
-					newCh.Reject(ssh.ConnectionFailed, "local service unavailable")
-					continue
-				}
-				if tc, ok := localConn.(*net.TCPConn); ok {
-					tc.SetNoDelay(true)
-				}
+				// 每个新 channel 用独立 goroutine 处理，消除队头阻塞：
+				// 本地服务瞬时卡顿时，一次拨号挂住不应阻塞后续所有转发请求
+				go func(newCh ssh.NewChannel) {
+					localAddr := fmt.Sprintf("%s:%d", channelHandler.localHost, channelHandler.localPort)
+					// 带超时拨号：本地服务无响应时快速 reject，避免无限等待拖垮上游
+					localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
+					if err != nil {
+						logger.Error("Failed to connect to local %s: %v", localAddr, err)
+						newCh.Reject(ssh.ConnectionFailed, "local service unavailable")
+						return
+					}
+					if tc, ok := localConn.(*net.TCPConn); ok {
+						tc.SetNoDelay(true)
+					}
 
-				var originAddr, originPort string
-				extraData := newCh.ExtraData()
-				if len(extraData) >= 8 {
-					addrLen := int(binary.BigEndian.Uint32(extraData[0:4]))
-					offset := 4 + addrLen + 4
+					var originAddr, originPort string
+					extraData := newCh.ExtraData()
+					if len(extraData) >= 8 {
+						addrLen := int(binary.BigEndian.Uint32(extraData[0:4]))
+						offset := 4 + addrLen + 4
 
-					if len(extraData) >= offset+4 {
-						originAddrLen := int(binary.BigEndian.Uint32(extraData[offset:offset+4]))
-						offset += 4
+						if len(extraData) >= offset+4 {
+							originAddrLen := int(binary.BigEndian.Uint32(extraData[offset:offset+4]))
+							offset += 4
 
-						if len(extraData) >= offset+originAddrLen+4 {
-							originAddr = string(extraData[offset : offset+originAddrLen])
-							offset += originAddrLen
-							originPort = fmt.Sprintf("%d", binary.BigEndian.Uint32(extraData[offset:offset+4]))
+							if len(extraData) >= offset+originAddrLen+4 {
+								originAddr = string(extraData[offset : offset+originAddrLen])
+								offset += originAddrLen
+								originPort = fmt.Sprintf("%d", binary.BigEndian.Uint32(extraData[offset:offset+4]))
+							}
 						}
 					}
-				}
 
-				logger.Info("[FORWARDED-TCPIP] Connection forwarded - OriginAddr: %s, OriginPort: %s", originAddr, originPort)
+					logger.Info("[FORWARDED-TCPIP] Connection forwarded - OriginAddr: %s, OriginPort: %s", originAddr, originPort)
 
-				ch, _, err := newCh.Accept()
-				if err != nil {
-					logger.Error("Failed to accept channel: %v", err)
-					localConn.Close()
-					newCh.Reject(ssh.ConnectionFailed, "failed to accept")
-					continue
-				}
+					ch, _, err := newCh.Accept()
+					if err != nil {
+						logger.Error("Failed to accept channel: %v", err)
+						localConn.Close()
+						newCh.Reject(ssh.ConnectionFailed, "failed to accept")
+						return
+					}
 
-				go channelHandler.handleChannel(connCtx, ch, localConn)
+					channelHandler.handleChannel(connCtx, ch, localConn)
+				}(newCh)
 			}
 		}
 	}()
@@ -262,7 +285,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		case <-heartbeatTicker.C:
 			heartbeatSuccess := false
 			for retry := 0; retry < 3; retry++ {
-				_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+				err := sendKeepaliveWithTimeout(client, 10*time.Second)
 				if err == nil {
 					heartbeatSuccess = true
 					break
