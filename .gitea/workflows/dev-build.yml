@@ -218,10 +218,12 @@ jobs:
           mc alias set minio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
           mc mb "minio/${MINIO_BUCKET}" 2>&1 || true
 
-          # 路径约定（Web 端扫描按 version_prefix='nssh-v' 解析）：
-          #   nssh-vdev-{日期}-{commit}/{label}/nssh-opensource-dev-{日期}-{commit}-{label}
-          # → 页面版本号 dev-{日期}-{commit}，扫描入库即展示，仅供测试下载
-          FILENAME="nssh-opensource-${VERSION}-${LABEL}"
+          # 路径约定（与 release-standard / agent CI / Web 端解析器一致）：
+          #   nssh-v{VERSION}/{label}/nssh-opensource-v{VERSION}-{label}
+          # dev 版本号 dev-{日期}-{commit} → nssh-vdev-{日期}-{commit}/.../
+          # 文件名必须带 -v（nssh-opensource-vdev-...），agent 心跳解析器按
+          # {bin_name}-v{VERSION}-{label} 正则匹配，少 v 会匹配不到任何 dev 产物
+          FILENAME="nssh-opensource-v${VERSION}-${LABEL}"
           [ "${GOOS}" = "windows" ] && FILENAME="${FILENAME}.exe"
           TARGET_PATH="nssh-v${VERSION}/${LABEL}/${FILENAME}"
           mc cp "${OUTPUT}" "minio/${MINIO_BUCKET}/${TARGET_PATH}"
