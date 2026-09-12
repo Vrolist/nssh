@@ -63,7 +63,7 @@ jobs:
     runs-on: go-linux
     timeout-minutes: 30
     env:
-      # 局域网直连 Harbor，不走代理（代理 192.168.2.40:7890 已停用）
+      # 局域网直连 Harbor，不走代理
       # 注意: docker login/push 由宿主 docker daemon 执行，需在 daemon 侧
       # 配置 NO_PROXY（见 /etc/systemd/system/docker.service.d/*.conf），
       # 此处的 env 只对 docker CLI 内联请求（如 buildx imagetools）生效
@@ -82,7 +82,7 @@ jobs:
 
       - name: Remove Docker daemon proxy
         run: |
-          # 旧代理 192.168.2.40:7890 已停用，彻底清除 Docker daemon 代理
+          # 清除 Docker daemon 残留代理配置
           # act 容器以 root 运行，无需 sudo
           OVERRIDE_DIR="/etc/systemd/system/docker.service.d"
           # 删除所有 override 文件中的代理配置

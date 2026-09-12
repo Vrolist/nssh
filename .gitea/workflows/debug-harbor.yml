@@ -1,0 +1,54 @@
+name: Debug Harbor Connectivity
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: go-linux
+    timeout-minutes: 10
+    steps:
+      - name: Network & Docker diagnostics
+        run: |
+          echo "=== host ==="
+          hostname; uname -a
+          echo "=== ip addr ==="
+          ip addr 2>/dev/null || ifconfig 2>/dev/null || echo "(no ip/ifconfig)"
+          echo "=== route to harbor ==="
+          ip route get 192.168.2.88 2>/dev/null || echo "(ip route get unavailable)"
+          ip route 2>/dev/null | head -20
+          echo "=== job proxy env ==="
+          env | grep -iE 'proxy' || echo "(no proxy env in job)"
+          echo "=== /etc/docker/daemon.json ==="
+          cat /etc/docker/daemon.json 2>/dev/null || echo "(not found)"
+          echo "=== docker version ==="
+          docker version 2>/dev/null || echo "(docker cli unavailable)"
+          echo "=== docker context ==="
+          docker context ls 2>/dev/null || true
+          echo "=== docker info (proxy/registry lines) ==="
+          docker info 2>/dev/null | grep -iE 'proxy|registry|mirror' || echo "(no proxy/registry lines)"
+          echo "=== dockerd process env (proxy) ==="
+          PID=$(pidof dockerd 2>/dev/null)
+          if [ -n "$PID" ]; then
+            echo "dockerd pid=$PID"
+            cat /proc/$PID/environ 2>/dev/null | tr '\0' '\n' | grep -iE 'proxy' || echo "(no proxy in dockerd env)"
+          else
+            echo "(dockerd not visible in this pid namespace)"
+          fi
+          echo "=== systemd override dir ==="
+          ls -la /etc/systemd/system/docker.service.d/ 2>/dev/null || echo "(dir not found)"
+          for f in /etc/systemd/system/docker.service.d/*.conf; do
+            [ -f "$f" ] && echo "--- $f ---" && cat "$f"
+          done 2>/dev/null
+          echo "=== iptables nat ==="
+          iptables -t nat -L -n 2>/dev/null | head -60 || echo "(iptables unavailable)"
+          echo "=== nft ruleset ==="
+          nft list ruleset 2>/dev/null | head -60 || echo "(nft unavailable)"
+          echo "=== curl https /v2/ (job network) ==="
+          curl -sk -m 15 -D - -o /dev/null https://192.168.2.88/v2/ ; echo "curl exit=$?"
+          echo "=== curl http /v2/ ==="
+          curl -s -m 15 -D - -o /dev/null http://192.168.2.88/v2/ ; echo "curl exit=$?"
+          echo "=== tls cert fingerprint ==="
+          curl -skv -m 15 -o /dev/null https://192.168.2.88/v2/ 2>&1 | grep -iE 'subject:|issuer:|SSL connection|TLS' || echo "(no tls details)"
+          echo "=== docker login dummy (reproduce) ==="
+          echo "dummy-pass" | docker login 192.168.2.88 -u dummy --password-stdin 2>&1 || true
