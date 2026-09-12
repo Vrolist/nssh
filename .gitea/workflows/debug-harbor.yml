@@ -8,40 +8,60 @@ jobs:
     runs-on: go-linux
     timeout-minutes: 10
     steps:
-      - name: Host network diagnostics
+      - name: Host netns diagnostics v3
         run: |
           set +e
-          echo "=== host ==="
-          hostname; uname -a
-          echo "=== container route ==="
-          ip route get 192.168.2.88 2>/dev/null
-          echo "=== job proxy env ==="
-          env | grep -iE 'proxy' || echo "(no proxy env in job)"
-          echo "=== docker images ==="
-          docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -20
-          echo "=== container-side curl https ==="
-          curl -sk -m 15 -D - -o /dev/null https://192.168.2.88/v2/ ; echo "curl exit=$?"
-          echo "=== container-side curl verbose ==="
-          curl -skv -m 15 -o /dev/null https://192.168.2.88/v2/ 2>&1 | grep -iE 'Connected|subject:|issuer:|HTTP/|SSL conn' || true
-          echo "=== HOST netns diagnostics (docker run --net host) ==="
-          docker run --rm --net host --pid host --privileged -v /:/hostfs:ro alpine:3 sh -c '
-            apk add --no-cache iptables curl >/dev/null 2>&1
-            echo "--- dockerd env ---"
-            PID=$(pidof dockerd 2>/dev/null); echo "dockerd pid=$PID"
-            [ -n "$PID" ] && tr "\0" "\n" < /proc/$PID/environ | grep -iE "proxy" || echo "(no proxy in dockerd env)"
-            echo "--- host iptables nat ---"
-            iptables -t nat -S 2>/dev/null | head -100
-            echo "--- rules mentioning 443/7890/redirect/tproxy ---"
-            iptables-save 2>/dev/null | grep -iE "443|7890|redirect|tproxy" | head -40
-            nft list ruleset 2>/dev/null | grep -iE "443|7890|redirect|tproxy" | head -40
-            echo "--- host curl https /v2/ ---"
-            curl -sk -m 15 -D - -o /dev/null https://192.168.2.88/v2/ ; echo "curl exit=$?"
-            echo "--- host curl verbose ---"
-            curl -skv -m 15 -o /dev/null https://192.168.2.88/v2/ 2>&1 | grep -iE "Connected|subject:|issuer:|HTTP/|SSL conn" || true
-            echo "--- host /etc/hosts ---"
-            cat /hostfs/etc/hosts 2>/dev/null | tail -10
-            echo "--- host systemd docker overrides ---"
-            ls -la /hostfs/etc/systemd/system/docker.service.d/ 2>/dev/null || echo "(no override dir)"
-            cat /hostfs/etc/systemd/system/docker.service.d/*.conf 2>/dev/null
+          echo "=== docker ps ==="
+          docker ps --format '{{.ID}} {{.Names}} {{.Image}} {{.Ports}}'
+          echo "=== runner container inspect ==="
+          RID=$(hostname)
+          docker inspect "$RID" --format '{{.HostConfig.Privileged}} {{.HostConfig.NetworkMode}} {{.HostConfig.PidMode}} {{.Mounts}}' 2>/dev/null | head -5
+          echo "=== find act alpine rootfs ==="
+          ROOTFS=$(ls -d /root/.cache/act/*/hostexecutor/build/*/rootfs 2>/dev/null | head -1)
+          echo "rootfs: $ROOTFS"
+          echo "=== import local alpine image (no pull) ==="
+          if [ -n "$ROOTFS" ]; then
+            tar cf - -C "$ROOTFS" . 2>/dev/null | docker import - ci-alpine:v3 2>&1 | tail -1
+          fi
+          IMG=""
+          for CAND in ci-alpine:v3 $(docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'); do
+            if docker run --rm "$CAND" /bin/sh -c 'true' >/dev/null 2>&1 || docker run --rm "$CAND" sh -c 'true' >/dev/null 2>&1; then
+              IMG="$CAND"; break
+            fi
+          done
+          echo "shell-capable image: $IMG"
+          if [ -z "$IMG" ]; then echo "NO SHELL IMAGE AVAILABLE"; exit 0; fi
+          echo "=== HOST netns: busybox wget test (key test) ==="
+          docker run --rm --net host "$IMG" sh -c '
+            wget -S -T 10 --no-check-certificate -O /dev/null https://192.168.2.88/v2/ 2>&1 | head -15
+            echo "wget exit=$?"
           ' 2>&1 || echo "docker run failed exit=$?"
+          echo "=== HOST netns: chroot diag with host tools ==="
+          cat > /tmp/hostdiag.sh <<'EOS'
+          echo "--- hostname ---"
+          hostname
+          echo "--- curl harbor (host tools, host netns) ---"
+          curl -sk -m 10 -D - -o /dev/null https://192.168.2.88/v2/ ; echo "curl exit=$?"
+          echo "--- curl verbose ---"
+          curl -skv -m 10 -o /dev/null https://192.168.2.88/v2/ 2>&1 | grep -iE 'Connected|subject:|issuer:|HTTP/|SSL conn' || true
+          echo "--- ip rule ---"
+          ip rule 2>/dev/null || true
+          echo "--- ip route ---"
+          ip route 2>/dev/null || true
+          echo "--- iptables nat ---"
+          iptables -t nat -S 2>/dev/null | head -120 || true
+          echo "--- iptables rules of interest ---"
+          iptables-save 2>/dev/null | grep -iE '443|7890|redirect|tproxy' | head -40 || true
+          echo "--- nft rules of interest ---"
+          nft list ruleset 2>/dev/null | grep -iE '443|7890|redirect|tproxy' | head -40 || true
+          echo "--- dockerd env proxy ---"
+          PID=$(pidof dockerd 2>/dev/null); echo "pid=$PID"
+          [ -n "$PID" ] && tr '\0' '\n' < /proc/$PID/environ | grep -iE 'proxy' || echo "(no proxy env)"
+          echo "--- systemd docker overrides ---"
+          ls -la /etc/systemd/system/docker.service.d/ 2>/dev/null || echo "(no override dir)"
+          cat /etc/systemd/system/docker.service.d/*.conf 2>/dev/null || true
+          EOS
+          docker run --rm --net host --pid host --privileged -v /:/hostfs:ro -v /tmp/hostdiag.sh:/hostdiag.sh:ro "$IMG" \
+            sh -c 'chroot /hostfs /bin/bash < /hostdiag.sh 2>&1 || chroot /hostfs /bin/sh < /hostdiag.sh 2>&1 || echo "CHROOT FAILED"' \
+            2>&1 || echo "docker run failed exit=$?"
           echo "=== done ==="
