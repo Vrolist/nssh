@@ -8,47 +8,40 @@ jobs:
     runs-on: go-linux
     timeout-minutes: 10
     steps:
-      - name: Network & Docker diagnostics
+      - name: Host network diagnostics
         run: |
+          set +e
           echo "=== host ==="
           hostname; uname -a
-          echo "=== ip addr ==="
-          ip addr 2>/dev/null || ifconfig 2>/dev/null || echo "(no ip/ifconfig)"
-          echo "=== route to harbor ==="
-          ip route get 192.168.2.88 2>/dev/null || echo "(ip route get unavailable)"
-          ip route 2>/dev/null | head -20
+          echo "=== container route ==="
+          ip route get 192.168.2.88 2>/dev/null
           echo "=== job proxy env ==="
           env | grep -iE 'proxy' || echo "(no proxy env in job)"
-          echo "=== /etc/docker/daemon.json ==="
-          cat /etc/docker/daemon.json 2>/dev/null || echo "(not found)"
-          echo "=== docker version ==="
-          docker version 2>/dev/null || echo "(docker cli unavailable)"
-          echo "=== docker context ==="
-          docker context ls 2>/dev/null || true
-          echo "=== docker info (proxy/registry lines) ==="
-          docker info 2>/dev/null | grep -iE 'proxy|registry|mirror' || echo "(no proxy/registry lines)"
-          echo "=== dockerd process env (proxy) ==="
-          PID=$(pidof dockerd 2>/dev/null)
-          if [ -n "$PID" ]; then
-            echo "dockerd pid=$PID"
-            cat /proc/$PID/environ 2>/dev/null | tr '\0' '\n' | grep -iE 'proxy' || echo "(no proxy in dockerd env)"
-          else
-            echo "(dockerd not visible in this pid namespace)"
-          fi
-          echo "=== systemd override dir ==="
-          ls -la /etc/systemd/system/docker.service.d/ 2>/dev/null || echo "(dir not found)"
-          for f in /etc/systemd/system/docker.service.d/*.conf; do
-            [ -f "$f" ] && echo "--- $f ---" && cat "$f"
-          done 2>/dev/null
-          echo "=== iptables nat ==="
-          iptables -t nat -L -n 2>/dev/null | head -60 || echo "(iptables unavailable)"
-          echo "=== nft ruleset ==="
-          nft list ruleset 2>/dev/null | head -60 || echo "(nft unavailable)"
-          echo "=== curl https /v2/ (job network) ==="
+          echo "=== docker images ==="
+          docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -20
+          echo "=== container-side curl https ==="
           curl -sk -m 15 -D - -o /dev/null https://192.168.2.88/v2/ ; echo "curl exit=$?"
-          echo "=== curl http /v2/ ==="
-          curl -s -m 15 -D - -o /dev/null http://192.168.2.88/v2/ ; echo "curl exit=$?"
-          echo "=== tls cert fingerprint ==="
-          curl -skv -m 15 -o /dev/null https://192.168.2.88/v2/ 2>&1 | grep -iE 'subject:|issuer:|SSL connection|TLS' || echo "(no tls details)"
-          echo "=== docker login dummy (reproduce) ==="
-          echo "dummy-pass" | docker login 192.168.2.88 -u dummy --password-stdin 2>&1 || true
+          echo "=== container-side curl verbose ==="
+          curl -skv -m 15 -o /dev/null https://192.168.2.88/v2/ 2>&1 | grep -iE 'Connected|subject:|issuer:|HTTP/|SSL conn' || true
+          echo "=== HOST netns diagnostics (docker run --net host) ==="
+          docker run --rm --net host --pid host --privileged -v /:/hostfs:ro alpine:3 sh -c '
+            apk add --no-cache iptables curl >/dev/null 2>&1
+            echo "--- dockerd env ---"
+            PID=$(pidof dockerd 2>/dev/null); echo "dockerd pid=$PID"
+            [ -n "$PID" ] && tr "\0" "\n" < /proc/$PID/environ | grep -iE "proxy" || echo "(no proxy in dockerd env)"
+            echo "--- host iptables nat ---"
+            iptables -t nat -S 2>/dev/null | head -100
+            echo "--- rules mentioning 443/7890/redirect/tproxy ---"
+            iptables-save 2>/dev/null | grep -iE "443|7890|redirect|tproxy" | head -40
+            nft list ruleset 2>/dev/null | grep -iE "443|7890|redirect|tproxy" | head -40
+            echo "--- host curl https /v2/ ---"
+            curl -sk -m 15 -D - -o /dev/null https://192.168.2.88/v2/ ; echo "curl exit=$?"
+            echo "--- host curl verbose ---"
+            curl -skv -m 15 -o /dev/null https://192.168.2.88/v2/ 2>&1 | grep -iE "Connected|subject:|issuer:|HTTP/|SSL conn" || true
+            echo "--- host /etc/hosts ---"
+            cat /hostfs/etc/hosts 2>/dev/null | tail -10
+            echo "--- host systemd docker overrides ---"
+            ls -la /hostfs/etc/systemd/system/docker.service.d/ 2>/dev/null || echo "(no override dir)"
+            cat /hostfs/etc/systemd/system/docker.service.d/*.conf 2>/dev/null
+          ' 2>&1 || echo "docker run failed exit=$?"
+          echo "=== done ==="
