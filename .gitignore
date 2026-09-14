@@ -11,6 +11,7 @@
 
 # Output
 *.out
+*.profraw
 dist/
 
 # Dependency directories
