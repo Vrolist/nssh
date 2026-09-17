@@ -4,6 +4,7 @@
 package daemon
 
 import (
+	"bufio"
 	"encoding/json"
 	"net"
 	"sync"
@@ -168,14 +169,15 @@ func (t *UnixTransport) SendCommand(cmd int, params map[string]string, timestamp
 		return "", err
 	}
 
-	var buf [4096]byte
-	var bytesRead uint32
-	err = windows.ReadFile(handle, buf[:], &bytesRead, nil)
+	// 循环读到响应结束（'\n'）：daemon 响应为单行紧凑 JSON + '\n' 结尾。
+	// 此前单次 ReadFile 只读 4096 字节，worker 较多时 CMD_LIST 响应被截断，
+	// CLI 解析报 "unexpected end of JSON input"（对齐 unix 版 ReadString 语义）
+	reader := bufio.NewReader(&namedPipeConn{handle: handle})
+	line, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
-
-	return string(buf[:bytesRead]), nil
+	return line[:len(line)-1], nil
 }
 
 func (t *UnixTransport) Stop() error {
