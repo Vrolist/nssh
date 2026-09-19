@@ -95,22 +95,20 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 
 	serverAddr := fmt.Sprintf("%s:%d", config.ServerHost, config.ServerPort)
 
-	// TCP 层 keepalive：OS 默认探测间隔太长（约 2 小时），显式 30s 尽快发现半开连接
-	dialer := &net.Dialer{KeepAlive: 30 * time.Second}
-	tcpConn, err := dialer.Dial("tcp", serverAddr)
+	// 传输层建立（阶段1新增）：transport=auto|quic|tcp
+	// - auto（默认）：QUIC 探测成功走 QUIC（UDP 单 stream），失败/未启用自动回退 TCP——老服务端/受限网络零影响
+	// - tcp：现状路径，一行不动
+	// SSH 协议层完全一致：两个传输都只是给 ssh.NewClientConn 提供一条 net.Conn
+	transportConn, transportMode, err := dialTransport(ctx, config, serverAddr)
 	if err != nil {
 		statsManager.RecordFailure()
-		return fmt.Errorf("failed to dial: %w", err)
-	}
-	
-	if tc, ok := tcpConn.(*net.TCPConn); ok {
-		tc.SetNoDelay(true)
+		return fmt.Errorf("failed to dial (%s): %w", transportMode, err)
 	}
 
-	clientConn, chans, reqs, err := ssh.NewClientConn(tcpConn, serverAddr, sshConfig)
+	clientConn, chans, reqs, err := ssh.NewClientConn(transportConn, serverAddr, sshConfig)
 	if err != nil {
 		statsManager.RecordFailure()
-		tcpConn.Close()
+		transportConn.Close()
 		return fmt.Errorf("failed to create SSH client: %w", err)
 	}
 	
@@ -148,7 +146,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 	go ssh.DiscardRequests(reqs)
 
 	statsManager.RecordConnection()
-	logger.Info("Connected to %s", serverAddr)
+	logger.Info("Connected to %s via %s", serverAddr, transportMode)
 
 	connCtx, connCancel := context.WithCancel(ctx)
 
@@ -176,7 +174,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 	requests := client.HandleChannelOpen("forwarded-tcpip")
 	if requests == nil {
 		client.Close()
-		tcpConn.Close()
+		transportConn.Close()
 		return fmt.Errorf("failed to register for forwarded-tcpip channel requests")
 	}
 
@@ -189,7 +187,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 	}))
 	if err != nil {
 		client.Close()
-		tcpConn.Close()
+		transportConn.Close()
 		return fmt.Errorf("failed to send tcpip-forward request: %w", err)
 	}
 
@@ -264,7 +262,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 			logger.Info("Shutting down by user request")
 			connCancel()
 			client.Close()
-			tcpConn.Close()
+			transportConn.Close()
 			statsManager.RecordDisconnection()
 			select {
 			case err := <-connErr:
@@ -276,7 +274,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 			return nil
 		case <-connCtx.Done():
 			client.Close()
-			tcpConn.Close()
+			transportConn.Close()
 			statsManager.RecordDisconnection()
 			if err := <-connErr; err != nil {
 				return fmt.Errorf("connection closed: %w", err)
@@ -297,7 +295,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 				logger.Error("Heartbeat failed after 3 retries, closing connection")
 				connCancel()
 				client.Close()
-				tcpConn.Close()
+				transportConn.Close()
 				statsManager.RecordDisconnection()
 				return fmt.Errorf("heartbeat failed after 3 retries")
 			}

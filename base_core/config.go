@@ -13,18 +13,19 @@ import (
 var BuildVersion = "dev"
 
 type Config struct {
-	ServerHost       string
-	ServerPort       int
-	Username         string
-	Password         string
-	SSHKeyPath       string
-	LocalHost        string
-	LocalPort        int
-	RemotePort       int
-	ReconnectDelay   int
-	MaxOfflineCount  int
-	MaxLifetime      int  // MaxLifetime in seconds; 0 means no lifetime restart
-	Version          string
+	ServerHost      string
+	ServerPort      int
+	Username        string
+	Password        string
+	SSHKeyPath      string
+	LocalHost       string
+	LocalPort       int
+	RemotePort      int
+	ReconnectDelay  int
+	MaxOfflineCount int
+	MaxLifetime     int    // MaxLifetime in seconds; 0 means no lifetime restart
+	Transport       string // 传输模式: auto（默认，QUIC 探测成功用 QUIC，否则 TCP）/ quic / tcp
+	Version         string
 }
 
 // 【daemon; worker】Config 结构体内存占用分析：
@@ -38,7 +39,7 @@ type Config struct {
 // - int (RemotePort): 8 bytes
 // - int (ReconnectDelay): 8 bytes
 // 总计: 约 120-700 bytes/实例
-// 生命周期: 
+// 生命周期:
 //   - daemon: 在ProcessInfo中保存，随worker生命周期
 //   - worker: 进程启动时创建，进程结束时释放
 
@@ -54,6 +55,7 @@ func LoadConfig(reverseTunnel string, port int, password string, sshKey string, 
 		RemotePort:     getEnvInt("REMOTE_PORT", 8000),
 		ReconnectDelay: getEnvInt("RECONNECT_DELAY", 30),
 		MaxLifetime:    getEnvInt("MAX_LIFETIME", 172800),
+		Transport:      getEnv("NSSH_TRANSPORT", "auto"),
 	}
 
 	args := flag.Args()
@@ -138,6 +140,7 @@ func LoadConfigFromEnv() *Config {
 		ReconnectDelay:  getEnvInt("RECONNECT_DELAY", 60),
 		MaxOfflineCount: getEnvInt("MAX_OFFLINE_COUNT", 14400),
 		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
+		Transport:       getEnv("NSSH_TRANSPORT", "auto"),
 		Version:         BuildVersion,
 	}
 }
@@ -155,7 +158,7 @@ func IsValidDomain(domain string) bool {
 			return false
 		}
 		for _, r := range part {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || 
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
 				(r >= '0' && r <= '9') || r == '-') {
 				return false
 			}
