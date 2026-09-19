@@ -4,6 +4,7 @@
 package daemon
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -67,14 +68,19 @@ func TestGetSystemInfo(t *testing.T) {
 }
 
 func TestGetProcessMemory(t *testing.T) {
-	mem, err := GetProcessMemory(1) // PID 1，总是存在
+	mem, err := GetProcessMemory(os.Getpid()) // 测试进程自身，任何平台都存在且 ps 可读
 	if err != nil {
-		t.Logf("GetProcessMemory(1) failed (expected on some systems): %v", err)
-		return
+		// ps 不可用/受限的环境（如沙箱、精简容器）下跳过，不算失败
+		t.Skipf("GetProcessMemory skipped (ps unavailable in this environment): %v", err)
 	}
 
 	if mem.VmRSS <= 0 {
 		t.Errorf("VmRSS = %d, want > 0", mem.VmRSS)
+	}
+
+	// 读不到数据的进程应返回错误而非静默 0 值（监控链路依赖此语义）
+	if _, err := GetProcessMemory(999999999); err == nil {
+		t.Error("GetProcessMemory(nonexistent pid) should return error, got nil")
 	}
 }
 

@@ -119,6 +119,7 @@ Salsa CI 全绿 → ITP bug 申报 → 提交 sponsor（mentors.debian.net）→
 
 | 日期 | 改动 | 文件 |
 |---|---|---|
+| 2026-09-19 | 修复 TestGetProcessMemory 在 macOS 失败：根因是 getProcessMemoryDarwin 对 ps 空输出/全0（SIP 保护进程、沙箱受限）静默返回 VmRSS=0 不报错（还会污染监控数据）；改为无数据/非法 RSS 时返回 error。测试改用 os.Getpid() 替代 PID 1（macOS 上是 SIP 保护的 launchd），ps 不可用环境 t.Skip，新增"不存在 PID 必须报错"断言。Linux /proc 路径未动 | daemon/system_info.go、daemon/system_info_test.go |
 | 2026-09-19 | SSH over QUIC 阶段1实现（客户端）：新增 base_tunnel/transport.go——tcp/quic/auto 三模式分派 + auto 探测状态机（QUIC 握手短探针 1s，成功粘性缓存；失败回退 TCP 并缓存 5min 后周期重探；quic 缓存失效时本轮 TCP 兜底）；quicStreamConn 适配器（quic.Stream 补 LocalAddr/RemoteAddr，Close 级联关闭 QUIC 连接）；tunnel.go ConnectAndTunnel 接入 dialTransport（TCP 原路径一行不动，日志带 via transport）；--transport 参数 + NSSH_TRANSPORT env（CLI 设置 env 透传 daemon/worker，进程内 worker 经 Config 结构体传递）；新增 transport_test.go 7 用例（归一化/QUIC echo/死目标快速失败/auto 探测成功/auto 回退 TCP/缓存降级兜底/强制模式 + SSH 握手集成）。quic-go v0.40.1（兼容现有 go 1.20，与服务端 v0.57 RFC 互通） | base_tunnel/transport.go、base_tunnel/transport_test.go、base_tunnel/tunnel.go、base_core/config.go、main.go、go.mod |
 | 2026-08-27 | Debian 打包：单 module 合并、native 格式、Build-Depends golang 依赖、PIE、man page、lintian 全绿；本地 Debian13 VM 验证 sbuild/lintian/pbuilder/autopkgtest 全过；新增 Salsa CI 并推送到 salsa | go.mod、debian/、.gitlab-ci.yml |
 | 2026-08-27 | Python 包发布到 PyPI：worker 脚本 + wheel 构建，publish-python job | python/、.github/workflows/release-standard.yml |

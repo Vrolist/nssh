@@ -152,13 +152,19 @@ func getProcessMemoryDarwin(pid int) (ProcessMemory, error) {
 	}
 
 	parts := strings.Fields(strings.TrimSpace(string(output)))
-	if len(parts) >= 2 {
-		if rss, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
-			mem.VmRSS = rss
-		}
-		if vsz, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
-			mem.VmSize = vsz
-		}
+	if len(parts) < 2 {
+		// ps 成功退出但无数据（如 SIP 保护下的系统进程、僵尸进程）：
+		// 必须报错而非静默返回 0，否则监控链路会上报 0 值污染数据
+		return mem, fmt.Errorf("ps returned no memory data for pid %d", pid)
+	}
+	if rss, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
+		mem.VmRSS = rss
+	}
+	if vsz, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+		mem.VmSize = vsz
+	}
+	if mem.VmRSS <= 0 {
+		return mem, fmt.Errorf("ps returned invalid VmRSS %d for pid %d", mem.VmRSS, pid)
 	}
 
 	return mem, nil
