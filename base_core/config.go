@@ -25,6 +25,7 @@ type Config struct {
 	MaxOfflineCount int
 	MaxLifetime     int    // MaxLifetime in seconds; 0 means no lifetime restart
 	Transport       string // 传输模式: auto（默认，QUIC 探测成功用 QUIC，否则 TCP）/ quic / tcp
+	Proto           string // 反向转发协议: tcp（默认，存量零影响）/ udp（UDP 业务穿透）
 	Version         string
 }
 
@@ -56,6 +57,7 @@ func LoadConfig(reverseTunnel string, port int, password string, sshKey string, 
 		ReconnectDelay: getEnvInt("RECONNECT_DELAY", 30),
 		MaxLifetime:    getEnvInt("MAX_LIFETIME", 172800),
 		Transport:      getEnv("NSSH_TRANSPORT", "auto"),
+		Proto:          NormalizeProto(getEnv("NSSH_PROTO", "tcp")),
 	}
 
 	args := flag.Args()
@@ -141,8 +143,19 @@ func LoadConfigFromEnv() *Config {
 		MaxOfflineCount: getEnvInt("MAX_OFFLINE_COUNT", 14400),
 		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
 		Transport:       getEnv("NSSH_TRANSPORT", "auto"),
+		Proto:           NormalizeProto(getEnv("NSSH_PROTO", "tcp")),
 		Version:         BuildVersion,
 	}
+}
+
+// NormalizeProto 归一化转发协议参数：空串/未知值回退 tcp（默认，存量命令零影响）。
+// 与 --transport 的分工：transport 管"外壳怎么连服务端"（auto/quic/tcp），
+// proto 管"转发的业务是什么协议"（tcp/udp）。
+func NormalizeProto(proto string) string {
+	if strings.ToLower(strings.TrimSpace(proto)) == "udp" {
+		return "udp"
+	}
+	return "tcp"
 }
 
 func IsValidDomain(domain string) bool {

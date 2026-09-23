@@ -41,6 +41,95 @@ type ChannelHandler struct {
 // 总计: 约 30-50 bytes/实例 (不含共享的StatsManager)
 // 生命周期: 每次SSH连接时创建，连接断开后释放
 
+// setupTCPForward TCP 反向转发（现状路径原样迁移）：注册 forwarded-tcpip channel 接收 +
+// 发送 tcpip-forward 端口声明 + 转发循环（每个新 channel 独立 goroutine 处理，消除队头阻塞）
+func setupTCPForward(client *ssh.Client, channelHandler *ChannelHandler, connCtx context.Context, config *base_core.Config) {
+	logger := base_core.GetLogger()
+
+	requests := client.HandleChannelOpen("forwarded-tcpip")
+	if requests == nil {
+		// 注册失败属罕见路径：记录错误并断开连接（等待上层重连）
+		logger.Error("Failed to register for forwarded-tcpip channel requests")
+		client.Close()
+		return
+	}
+
+	_, _, err := client.SendRequest("tcpip-forward", true, ssh.Marshal(&struct {
+		Address string
+		Port    uint32
+	}{
+		Address: "0.0.0.0",
+		Port:    uint32(config.RemotePort),
+	}))
+	if err != nil {
+		logger.Error("Failed to send tcpip-forward request: %v", err)
+		client.Close()
+		return
+	}
+
+	logger.Info("Tunnel established successfully! Remote listener: 0.0.0.0:%d, Local target: %s:%d", config.RemotePort, config.LocalHost, config.LocalPort)
+
+	go func() {
+		for {
+			select {
+			case <-connCtx.Done():
+				return
+			case newCh, ok := <-requests:
+				if !ok {
+					logger.Warn("Channel requests channel closed")
+					return
+				}
+
+				// 每个新 channel 用独立 goroutine 处理，消除队头阻塞：
+				// 本地服务瞬时卡顿时，一次拨号挂住不应阻塞后续所有转发请求
+				go func(newCh ssh.NewChannel) {
+					localAddr := fmt.Sprintf("%s:%d", channelHandler.localHost, channelHandler.localPort)
+					// 带超时拨号：本地服务无响应时快速 reject，避免无限等待拖垮上游
+					localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
+					if err != nil {
+						logger.Error("Failed to connect to local %s: %v", localAddr, err)
+						newCh.Reject(ssh.ConnectionFailed, "local service unavailable")
+						return
+					}
+					if tc, ok := localConn.(*net.TCPConn); ok {
+						tc.SetNoDelay(true)
+					}
+
+					var originAddr, originPort string
+					extraData := newCh.ExtraData()
+					if len(extraData) >= 8 {
+						addrLen := int(binary.BigEndian.Uint32(extraData[0:4]))
+						offset := 4 + addrLen + 4
+
+						if len(extraData) >= offset+4 {
+							originAddrLen := int(binary.BigEndian.Uint32(extraData[offset:offset+4]))
+							offset += 4
+
+							if len(extraData) >= offset+originAddrLen+4 {
+								originAddr = string(extraData[offset : offset+originAddrLen])
+								offset += originAddrLen
+								originPort = fmt.Sprintf("%d", binary.BigEndian.Uint32(extraData[offset:offset+4]))
+							}
+						}
+					}
+
+					logger.Info("[FORWARDED-TCPIP] Connection forwarded - OriginAddr: %s, OriginPort: %s", originAddr, originPort)
+
+					ch, _, err := newCh.Accept()
+					if err != nil {
+						logger.Error("Failed to accept channel: %v", err)
+						localConn.Close()
+						newCh.Reject(ssh.ConnectionFailed, "failed to accept")
+						return
+					}
+
+					channelHandler.handleChannel(connCtx, ch, localConn)
+				}(newCh)
+			}
+		}
+	}()
+}
+
 // sendKeepaliveWithTimeout 发送 keepalive 并带超时保护。
 // TCP 半开（网络静默断开，无 FIN/RST）时 SendRequest 会阻塞在内核重传上长达数分钟，
 // 包一层超时可以让客户端尽快判定断线并进入重连流程，缩短隧道不可用窗口。
@@ -171,87 +260,19 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		statsManager: statsManager,
 	}
 
-	requests := client.HandleChannelOpen("forwarded-tcpip")
-	if requests == nil {
-		client.Close()
-		transportConn.Close()
-		return fmt.Errorf("failed to register for forwarded-tcpip channel requests")
-	}
-
-	_, _, err = client.SendRequest("tcpip-forward", true, ssh.Marshal(&struct {
-		Address string
-		Port    uint32
-	}{
-		Address: "0.0.0.0",
-		Port:    uint32(config.RemotePort),
-	}))
-	if err != nil {
-		client.Close()
-		transportConn.Close()
-		return fmt.Errorf("failed to send tcpip-forward request: %w", err)
-	}
-
-	logger.Info("Tunnel established successfully! Remote listener: 0.0.0.0:%d, Local target: %s:%d", config.RemotePort, config.LocalHost, config.LocalPort)
-
-	go func() {
-		for {
-			select {
-			case <-connCtx.Done():
-				return
-			case newCh, ok := <-requests:
-				if !ok {
-					logger.Warn("Channel requests channel closed")
-					return
-				}
-
-				// 每个新 channel 用独立 goroutine 处理，消除队头阻塞：
-				// 本地服务瞬时卡顿时，一次拨号挂住不应阻塞后续所有转发请求
-				go func(newCh ssh.NewChannel) {
-					localAddr := fmt.Sprintf("%s:%d", channelHandler.localHost, channelHandler.localPort)
-					// 带超时拨号：本地服务无响应时快速 reject，避免无限等待拖垮上游
-					localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
-					if err != nil {
-						logger.Error("Failed to connect to local %s: %v", localAddr, err)
-						newCh.Reject(ssh.ConnectionFailed, "local service unavailable")
-						return
-					}
-					if tc, ok := localConn.(*net.TCPConn); ok {
-						tc.SetNoDelay(true)
-					}
-
-					var originAddr, originPort string
-					extraData := newCh.ExtraData()
-					if len(extraData) >= 8 {
-						addrLen := int(binary.BigEndian.Uint32(extraData[0:4]))
-						offset := 4 + addrLen + 4
-
-						if len(extraData) >= offset+4 {
-							originAddrLen := int(binary.BigEndian.Uint32(extraData[offset:offset+4]))
-							offset += 4
-
-							if len(extraData) >= offset+originAddrLen+4 {
-								originAddr = string(extraData[offset : offset+originAddrLen])
-								offset += originAddrLen
-								originPort = fmt.Sprintf("%d", binary.BigEndian.Uint32(extraData[offset:offset+4]))
-							}
-						}
-					}
-
-					logger.Info("[FORWARDED-TCPIP] Connection forwarded - OriginAddr: %s, OriginPort: %s", originAddr, originPort)
-
-					ch, _, err := newCh.Accept()
-					if err != nil {
-						logger.Error("Failed to accept channel: %v", err)
-						localConn.Close()
-						newCh.Reject(ssh.ConnectionFailed, "failed to accept")
-						return
-					}
-
-					channelHandler.handleChannel(connCtx, ch, localConn)
-				}(newCh)
-			}
+	// 转发协议分支：udp = UDP 业务穿透（channel 基线）；tcp = 现状路径，一行不动
+	if config.Proto == "udp" {
+		udpCh, actualPort, err := setupUDPForward(client, config)
+		if err != nil {
+			client.Close()
+			transportConn.Close()
+			statsManager.RecordFailure()
+			return fmt.Errorf("failed to setup UDP forward: %w", err)
 		}
-	}()
+		go runUDPProxy(connCtx, udpCh, config, actualPort)
+	} else {
+		setupTCPForward(client, channelHandler, connCtx, config)
+	}
 
 	heartbeatTicker := time.NewTicker(60 * time.Second)
 	defer heartbeatTicker.Stop()

@@ -87,12 +87,16 @@ func main() {
 
 	// 传输模式（SSH over QUIC 阶段1）：auto=默认，QUIC 探测成功用 QUIC，失败回退 TCP；quic=强制 QUIC；tcp=现状路径
 	transportMode := pflag.String("transport", "auto", "Transport mode: auto (probe QUIC, fallback TCP), quic, tcp")
+	protoMode := pflag.String("proto", "tcp", "Reverse tunnel protocol: tcp (default), udp")
 
 	pflag.Parse()
 
-	// NSSH_TRANSPORT 环境变量透传给 daemon/worker 进程（worker 继承环境读取同名字段）
+	// NSSH_TRANSPORT / NSSH_PROTO 环境变量透传给 daemon/worker 进程（worker 继承环境读取同名字段）
 	if os.Getenv("NSSH_TRANSPORT") == "" {
 		os.Setenv("NSSH_TRANSPORT", *transportMode)
+	}
+	if os.Getenv("NSSH_PROTO") == "" {
+		os.Setenv("NSSH_PROTO", *protoMode)
 	}
 
 	if *daemonInnerMode {
