@@ -150,10 +150,15 @@ func LoadConfigFromEnv() *Config {
 
 // NormalizeProto 归一化转发协议参数：空串/未知值回退 tcp（默认，存量命令零影响）。
 // 与 --transport 的分工：transport 管"外壳怎么连服务端"（auto/quic/tcp），
-// proto 管"转发的业务是什么协议"（tcp/udp）。
+// proto 管"转发的业务是什么协议"（tcp/udp/both）。
 func NormalizeProto(proto string) string {
-	if strings.ToLower(strings.TrimSpace(proto)) == "udp" {
+	switch strings.ToLower(strings.TrimSpace(proto)) {
+	case "udp":
 		return "udp"
+	case "both":
+		// both = 同 remote_port 双栈：一条连接内先声明 tcpip-forward 再声明
+		// udp-forward@nssh（TCP/UDP 端口号不冲突，可同号共存）
+		return "both"
 	}
 	return "tcp"
 }

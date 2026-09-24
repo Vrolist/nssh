@@ -260,8 +260,13 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		statsManager: statsManager,
 	}
 
-	// 转发协议分支：udp = UDP 业务穿透（channel 基线）；tcp = 现状路径，一行不动
-	if config.Proto == "udp" {
+	// 转发协议分支（阶段4 扩展 --proto both）：
+	// - udp：仅 UDP 业务穿透（channel 基线）
+	// - both：单连接双栈——先 TCP 声明（现状路径原样），再 UDP 声明+数据面；
+	//   同 remote_port TCP/UDP 不冲突可共存，一条 worker 承载整条隧道（daemon 键规则不变）
+	// - tcp（默认）：现状路径，一行不动
+	switch config.Proto {
+	case "udp":
 		udpCh, actualPort, err := setupUDPForward(client, config)
 		if err != nil {
 			client.Close()
@@ -270,7 +275,20 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 			return fmt.Errorf("failed to setup UDP forward: %w", err)
 		}
 		go runUDPProxy(connCtx, udpCh, config, actualPort)
-	} else {
+	case "both":
+		// TCP 声明：沿用现状路径（声明失败会关闭连接触发上层重连）
+		setupTCPForward(client, channelHandler, connCtx, config)
+		// UDP 声明：失败视为整条隧道失败，返回错误触发重连循环
+		udpCh, actualPort, err := setupUDPForward(client, config)
+		if err != nil {
+			client.Close()
+			transportConn.Close()
+			statsManager.RecordFailure()
+			return fmt.Errorf("failed to setup UDP forward (dual-stack): %w", err)
+		}
+		go runUDPProxy(connCtx, udpCh, config, actualPort)
+		logger.Info("Dual-stack tunnel established! Remote listener: 0.0.0.0:%d (tcp+udp), Local target: %s:%d", config.RemotePort, config.LocalHost, config.LocalPort)
+	default:
 		setupTCPForward(client, channelHandler, connCtx, config)
 	}
 

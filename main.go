@@ -87,7 +87,7 @@ func main() {
 
 	// 传输模式（SSH over QUIC 阶段1）：auto=默认，QUIC 探测成功用 QUIC，失败回退 TCP；quic=强制 QUIC；tcp=现状路径
 	transportMode := pflag.String("transport", "auto", "Transport mode: auto (probe QUIC, fallback TCP), quic, tcp")
-	protoMode := pflag.String("proto", "tcp", "Reverse tunnel protocol: tcp (default), udp")
+	protoMode := pflag.String("proto", "tcp", "Reverse tunnel protocol: tcp (default), udp, both (same port dual-stack)")
 
 	pflag.Parse()
 
