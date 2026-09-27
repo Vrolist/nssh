@@ -120,23 +120,37 @@ jobs:
           # docker login/push 到 192.168.2.88 会概率性报
           # "x509: certificate signed by unknown authority"（alpine 基础镜像通常已在
           # 宿主 image 缓存中，Login 往往是首个真正触达 registry TLS 的步骤）。
-          # 统一安装 Harbor 自签证书到 daemon 信任目录：certs.d 每次请求时读取，
-          # 无需重启 daemon，对所有 runner 生效（已配置 insecure-registries 的不受影响）
+          # Harbor 自签证书直接内嵌（有效期至 2036-06-20；若证书轮换，用
+          #   openssl s_client -connect 192.168.2.88:443 -showcerts </dev/null
+          # 重新抓取并更新下方 PEM）。certs.d 每次请求时读取，无需重启 daemon；
+          # 已配置 insecure-registries 的 runner 不受影响。
+          # 不用 openssl 现场抓取：runner 无 openssl 时 apk 走外网源升级依赖，耗时 5 分钟+
           CERT_DIR="/etc/docker/certs.d/192.168.2.88"
           mkdir -p "${CERT_DIR}"
-          if ! command -v openssl >/dev/null 2>&1; then
-            apk add --no-cache openssl 2>/dev/null \
-              || apt-get install -y openssl 2>/dev/null \
-              || echo "openssl install failed, will try existing trust config"
-          fi
-          if command -v openssl >/dev/null 2>&1; then
-            openssl s_client -connect 192.168.2.88:443 -servername 192.168.2.88 -showcerts </dev/null 2>/dev/null \
-              | awk '/-----BEGIN CERT/,/-----END CERT-----/' > "${CERT_DIR}/ca.crt"
-            [ -s "${CERT_DIR}/ca.crt" ] || { echo "Error: failed to fetch Harbor cert chain"; exit 1; }
-            echo "Harbor cert installed to ${CERT_DIR}/ca.crt ($(grep -c 'BEGIN CERT' "${CERT_DIR}/ca.crt") cert)"
-          else
-            echo "Warning: openssl unavailable, falling back to runner's existing daemon trust config"
-          fi
+          cat > "${CERT_DIR}/ca.crt" <<'HARBOR_CA_EOF'
+          -----BEGIN CERTIFICATE-----
+          MIIDGjCCAgKgAwIBAgIURZ7Ck1v+ESEQ7WV9BDs6GF2Ra7owDQYJKoZIhvcNAQEL
+          BQAwETEPMA0GA1UEAwwGaGFyYm9yMB4XDTI2MDYyMzE1NDExN1oXDTM2MDYyMDE1
+          NDExN1owETEPMA0GA1UEAwwGaGFyYm9yMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A
+          MIIBCgKCAQEA+LMbgMbyzspJNgo2QDVbMhIStOy136gUKvhhC1kzbelxr3Xx8zJ6
+          TM7J0GXALkaFfO4bo5aMgb86KcOoemvBj8CeoQ+3w5MvTqSyLfMeSHTlhl6dqbVH
+          uAqbbhcT/c7AwzijU1xUBkrvznr64h6+yoanxYbwrn0OOxe7188WoulAT+euJPOc
+          WCAwtN9PiFEoUXv2mBuwf+5QgPRn2F08YQ6QCIzWAtoMFZ7MRX9jOLwU386F4fOe
+          7nAAImKkL8Gjaa5Dx4FJtSN7lh4a2ui5Bo9CkaCVf1VsC/PVIIbwh+hbKBcFAzVK
+          AztvLJffZ9XZVxFGKRVgvgKoU8yD4S/97QIDAQABo2owaDAdBgNVHQ4EFgQUe9fP
+          Fv8u8nDzGFrTNzYhLetX8ngwHwYDVR0jBBgwFoAUe9fPFv8u8nDzGFrTNzYhLetX
+          8ngwDwYDVR0TAQH/BAUwAwEB/zAVBgNVHREEDjAMhwTAqAJYhwR/AAABMA0GCSqG
+          SIb3DQEBCwUAA4IBAQAqR1+/s9r3h39iINgxhnX8t5DKA5wlrAAkN1cOySorWGm+
+          QEfB8Gvl8CLHIyrLlzuQRo25nuDudqqt62xNfnV7QJbn3x40TnUrqSoUFrc+Hl/V
+          QZI/22uwhd0Dq/8hqjBoC9ETyZ2eiKGWKNeDwpZHGLZD4IOHymU+uMsbZnbzVNpW
+          I3zsQiAuDa6QBY21mqYWX/dIHIRSQjIsqDIPjsimmuDw3ktjCCtqcvg2KQ7dnwLD
+          8L8qUVqB0z+1Z04IYZ9rc1e2s4NynRqWuO0daa/erXFLs9hSgFWNTgIIbaOsc812
+          /l9RlE91gob/HA+mQqXDXO1LssmX3I0ek6gcVXgB
+          -----END CERTIFICATE-----
+          HARBOR_CA_EOF
+          grep -q 'BEGIN CERTIFICATE' "${CERT_DIR}/ca.crt" && [ -s "${CERT_DIR}/ca.crt" ] \
+            && echo "Harbor cert installed to ${CERT_DIR}/ca.crt" \
+            || { echo "Error: embedded Harbor cert invalid"; exit 1; }
 
       - name: Setup Go
         run: |
