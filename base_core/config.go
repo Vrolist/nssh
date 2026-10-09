@@ -57,7 +57,7 @@ func LoadConfig(reverseTunnel string, port int, password string, sshKey string, 
 		ReconnectDelay: getEnvInt("RECONNECT_DELAY", 30),
 		MaxLifetime:    getEnvInt("MAX_LIFETIME", 172800),
 		Transport:      getEnv("NSSH_TRANSPORT", "auto"),
-		Proto:          NormalizeProto(getEnv("NSSH_PROTO", "tcp")),
+		Proto:          NormalizeProto(getEnv("NSSH_PROTO", "both")),
 	}
 
 	args := flag.Args()
@@ -143,14 +143,14 @@ func LoadConfigFromEnv() *Config {
 		MaxOfflineCount: getEnvInt("MAX_OFFLINE_COUNT", 14400),
 		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
 		Transport:       getEnv("NSSH_TRANSPORT", "auto"),
-		Proto:           NormalizeProto(getEnv("NSSH_PROTO", "tcp")),
+		Proto:           NormalizeProto(getEnv("NSSH_PROTO", "both")),
 		Version:         BuildVersion,
 	}
 }
 
-// NormalizeProto 归一化转发协议参数：空串/未知值回退 tcp（默认，存量命令零影响）。
+// NormalizeProto 归一化转发协议参数：空串/未知值回退 tcp（存量命令零影响）。
 // 与 --transport 的分工：transport 管"外壳怎么连服务端"（auto/quic/tcp），
-// proto 管"转发的业务是什么协议"（tcp/udp/both）。
+// proto 管"转发的业务是什么协议"（tcp/udp/both）；默认值 both = UDP 业务层默认开。
 func NormalizeProto(proto string) string {
 	switch strings.ToLower(strings.TrimSpace(proto)) {
 	case "udp":
