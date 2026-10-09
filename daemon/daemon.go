@@ -367,48 +367,48 @@ func (d *Daemon) Run() {
 			select {
 			case <-ticker.C:
 				d.cmdChan <- func(m map[string]*WorkerInfo) {
-						for key, p := range m {
-							if p.Status == "offline" && p.ReconnectNeeded && p.Config != nil {
-								d.logger.Info("Worker %s offline, triggering reconnect...", p.Username)
-								p.ReconnectNeeded = false
-								go d.startWorker(p.Config)
-								continue
-							}
-
-							if p.LastRegisterTime.IsZero() {
-								continue
-							}
-							elapsed := time.Since(p.LastRegisterTime)
-							if elapsed > 1*time.Minute {
-								d.logger.Warn("Worker %s no heartbeat for %v, marking as offline", key, elapsed)
-								p.Status = "offline"
-								p.StatusChangeTime = time.Now()
-								p.ReconnectNeeded = true
-
-								p.OfflineCount++
-								d.logger.Info("Worker %s offline count: %d", p.Username, p.OfflineCount)
-
-								maxOfflineCount := 14400
-								if p.Config != nil && p.Config.MaxOfflineCount > 0 {
-									maxOfflineCount = p.Config.MaxOfflineCount
-								}
-								if p.OfflineCount >= maxOfflineCount {
-									d.logger.Warn("Worker %s offline count reached %d, deleting...", p.Username, p.OfflineCount)
-									d.stopWorker(p, key)
-								}
-								continue
-							}
-
-							if p.Status == "online" && p.OfflineCount > 0 {
-								d.logger.Info("Worker %s back online, reset offline count from %d", p.Username, p.OfflineCount)
-								p.OfflineCount = 0
-							}
-
-							// MaxLifetime check: restart idle worker after exceeding lifetime
-							if shouldRestart, restartKey := CheckWorkerLifetime(p, key); shouldRestart {
-								go d.performAction("restart", p, restartKey)
-							}
+					for key, p := range m {
+						if p.Status == "offline" && p.ReconnectNeeded && p.Config != nil {
+							d.logger.Info("Worker %s offline, triggering reconnect...", p.Username)
+							p.ReconnectNeeded = false
+							go d.startWorker(p.Config)
+							continue
 						}
+
+						if p.LastRegisterTime.IsZero() {
+							continue
+						}
+						elapsed := time.Since(p.LastRegisterTime)
+						if elapsed > 1*time.Minute {
+							d.logger.Warn("Worker %s no heartbeat for %v, marking as offline", key, elapsed)
+							p.Status = "offline"
+							p.StatusChangeTime = time.Now()
+							p.ReconnectNeeded = true
+
+							p.OfflineCount++
+							d.logger.Info("Worker %s offline count: %d", p.Username, p.OfflineCount)
+
+							maxOfflineCount := 14400
+							if p.Config != nil && p.Config.MaxOfflineCount > 0 {
+								maxOfflineCount = p.Config.MaxOfflineCount
+							}
+							if p.OfflineCount >= maxOfflineCount {
+								d.logger.Warn("Worker %s offline count reached %d, deleting...", p.Username, p.OfflineCount)
+								d.stopWorker(p, key)
+							}
+							continue
+						}
+
+						if p.Status == "online" && p.OfflineCount > 0 {
+							d.logger.Info("Worker %s back online, reset offline count from %d", p.Username, p.OfflineCount)
+							p.OfflineCount = 0
+						}
+
+						// MaxLifetime check: restart idle worker after exceeding lifetime
+						if shouldRestart, restartKey := CheckWorkerLifetime(p, key); shouldRestart {
+							go d.performAction("restart", p, restartKey)
+						}
+					}
 
 					if len(m) == 0 {
 						if d.idleStartTime.IsZero() {
@@ -498,13 +498,15 @@ func (d *Daemon) handleTransportCommand(cmd int, params map[string]string, key s
 	}
 }
 
-func (d *Daemon) handleStartTransport(params map[string]string) string {
+// configFromStartParams 将 CMD_START 的 params 还原为 Config（纯函数，便于单测）。
+// 缺省/老 CLI 不传 proto/transport 时，归一为 tcp/auto，与旧行为一致。
+func configFromStartParams(params map[string]string) *base_core.Config {
 	reconnectDelay := parseInt(params["reconnect_delay"])
 	if reconnectDelay <= 0 {
 		reconnectDelay = 30
 	}
 
-	config := &base_core.Config{
+	return &base_core.Config{
 		Username:       params["username"],
 		ServerHost:     params["server_host"],
 		ServerPort:     parseInt(params["server_port"]),
@@ -515,7 +517,13 @@ func (d *Daemon) handleStartTransport(params map[string]string) string {
 		SSHKeyPath:     params["ssh_key"],
 		ReconnectDelay: reconnectDelay,
 		MaxLifetime:    parseInt(params["max_lifetime"]),
+		Proto:          base_core.NormalizeProto(params["proto"]),
+		Transport:      base_tunnel.NormalizeTransport(params["transport"]),
 	}
+}
+
+func (d *Daemon) handleStartTransport(params map[string]string) string {
+	config := configFromStartParams(params)
 
 	if err := validateConfig(config); err != nil {
 		resp := Response{Success: false, Error: err.Error()}
@@ -654,19 +662,19 @@ func (d *Daemon) handleRegisterTransport(params map[string]string) string {
 		} else {
 			isNewProcess = true
 			m[processKey] = &WorkerInfo{
-				ID:                 processKey,
-				Username:            username,
-				ServerHost:         serverHost,
-				ServerPort:         serverPort,
-				LocalHost:          localHost,
-				LocalPort:          localPort,
-				RemotePort:         remotePort,
-				Password:           password,
-				SSHKeyPath:         sshKey,
-				StartTime:          parseTime(startTimeStr, time.Now()),
-				Status:             status,
-				LastRegisterTime:   time.Now(),
-				StatusChangeTime:   parseTime(statusChangeTimeStr, time.Now()),
+				ID:               processKey,
+				Username:         username,
+				ServerHost:       serverHost,
+				ServerPort:       serverPort,
+				LocalHost:        localHost,
+				LocalPort:        localPort,
+				RemotePort:       remotePort,
+				Password:         password,
+				SSHKeyPath:       sshKey,
+				StartTime:        parseTime(startTimeStr, time.Now()),
+				Status:           status,
+				LastRegisterTime: time.Now(),
+				StatusChangeTime: parseTime(statusChangeTimeStr, time.Now()),
 			}
 		}
 	}
@@ -700,9 +708,9 @@ func (d *Daemon) handleListTransport() string {
 	processes := <-result
 
 	resp := Response{Success: true, Data: map[string]interface{}{
-		"daemon_pid":    os.Getpid(),
+		"daemon_pid":     os.Getpid(),
 		"daemon_version": d.version,
-		"processes":     processes,
+		"processes":      processes,
 	}}
 	b, _ := json.Marshal(resp)
 	return string(b) + "\n"
@@ -746,9 +754,9 @@ func (d *Daemon) handleLogTransport(params map[string]string) string {
 	}
 
 	resp := Response{Success: true, Data: map[string]interface{}{
-		"id":      process.ID,
-		"status":  process.Status,
-		"note":    "Log viewing not available for goroutine workers",
+		"id":     process.ID,
+		"status": process.Status,
+		"note":   "Log viewing not available for goroutine workers",
 	}}
 	b, _ := json.Marshal(resp)
 	return string(b) + "\n"
@@ -960,22 +968,22 @@ func (d *Daemon) startWorker(config *base_core.Config) error {
 		}
 
 		worker := &WorkerInfo{
-			ID:         workerKey,
-			CancelFunc: cancel,
-			ErrorChan:  make(chan error, 1),
-			DoneChan:   make(chan struct{}),
-			Username:   config.Username,
-			ServerHost: config.ServerHost,
-			ServerPort: config.ServerPort,
-			LocalHost:  config.LocalHost,
-			LocalPort:  config.LocalPort,
-			RemotePort: config.RemotePort,
-			Password:   config.Password,
-			SSHKeyPath: config.SSHKeyPath,
-			StartTime:  time.Now(),
-			Status:     "offline",
+			ID:          workerKey,
+			CancelFunc:  cancel,
+			ErrorChan:   make(chan error, 1),
+			DoneChan:    make(chan struct{}),
+			Username:    config.Username,
+			ServerHost:  config.ServerHost,
+			ServerPort:  config.ServerPort,
+			LocalHost:   config.LocalHost,
+			LocalPort:   config.LocalPort,
+			RemotePort:  config.RemotePort,
+			Password:    config.Password,
+			SSHKeyPath:  config.SSHKeyPath,
+			StartTime:   time.Now(),
+			Status:      "offline",
 			MaxLifetime: config.MaxLifetime,
-			Config:     config,
+			Config:      config,
 		}
 		m[workerKey] = worker
 
@@ -1149,7 +1157,7 @@ func (d *Daemon) handleTakeoverExport() string {
 		workers := make([]map[string]interface{}, 0, len(m))
 		for _, w := range m {
 			workers = append(workers, map[string]interface{}{
-				"username":     w.Username,
+				"username":    w.Username,
 				"server_host": w.ServerHost,
 				"server_port": w.ServerPort,
 				"local_host":  w.LocalHost,

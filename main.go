@@ -43,12 +43,12 @@ func main() {
 	// 2. Go不会立即释放内存给操作系统
 	// 3. 即使对象被GC回收，内存仍被Go runtime持有
 	// 4. 需要手动触发GC或等待runtime自动释放
-	// 
+	//
 	// 这意味着:
 	// - VmRSS高不代表实际内存泄漏
 	// - 需要查看 runtime.MemStats.Alloc 而不是 VmRSS
 	// - 如果 Alloc << VmRSS，说明大部分是Go runtime持有，不是泄漏
-	// 
+	//
 	// 建议添加内存监控:
 	// var m runtime.MemStats
 	// runtime.ReadMemStats(&m)
@@ -123,7 +123,7 @@ func main() {
 		if serverHost != "" {
 			config.ServerHost = serverHost
 		}
-		
+
 		if port > 0 && serverPort > 0 {
 			log.Fatal("Conflicting port specifications: both -p flag and host:port format are used. Please use only one method.")
 		}
@@ -240,7 +240,7 @@ func main() {
 		if serverHost != "" {
 			config.ServerHost = serverHost
 		}
-		
+
 		if port > 0 && serverPort > 0 {
 			log.Fatal("Conflicting port specifications: both -p flag and host:port format are used. Please use only one method.")
 		}
@@ -516,7 +516,7 @@ func runForeground(reverseTunnel string, port int, password string, sshKey strin
 	if serverHost != "" {
 		config.ServerHost = serverHost
 	}
-	
+
 	if port > 0 && serverPort > 0 {
 		log.Fatal("Conflicting port specifications: both -p flag and host:port format are used. Please use only one method.")
 	}
@@ -871,9 +871,11 @@ func printLogInfo(data interface{}) {
 	fmt.Printf("Note: %s\n", note)
 }
 
-func sendStartCommand(config *base_core.Config) {
-	transport := daemon.NewTransport()
-	params := map[string]string{
+// buildStartParams 将配置转换为 CMD_START 的 params（纯函数，便于单测）。
+// 转发协议/传输模式必须随 CMD_START 按隧道传给 daemon：daemon 是多隧道共享进程，
+// 用环境变量会串味，故走 params 逐隧道下发。
+func buildStartParams(config *base_core.Config) map[string]string {
+	return map[string]string{
 		"username":        config.Username,
 		"server_host":     config.ServerHost,
 		"server_port":     strconv.Itoa(config.ServerPort),
@@ -884,7 +886,14 @@ func sendStartCommand(config *base_core.Config) {
 		"ssh_key":         config.SSHKeyPath,
 		"reconnect_delay": strconv.Itoa(config.ReconnectDelay),
 		"max_lifetime":    strconv.Itoa(config.MaxLifetime),
+		"proto":           config.Proto,
+		"transport":       config.Transport,
 	}
+}
+
+func sendStartCommand(config *base_core.Config) {
+	transport := daemon.NewTransport()
+	params := buildStartParams(config)
 
 	respStr, err := transport.SendCommand(daemon.CMD_START, params, time.Now().Unix())
 	if err != nil {
@@ -1097,8 +1106,6 @@ func handleTakeover(force bool) {
 		workers = []interface{}{}
 	}
 
-
-
 	workerList := make([]map[string]interface{}, 0)
 	for _, w := range workers {
 		wm, ok := w.(map[string]interface{})
@@ -1172,13 +1179,13 @@ func handleTakeover(force bool) {
 		password, _ := w["password"].(string)
 
 		config := &base_core.Config{
-			Username:    username,
-			ServerHost:  serverHost,
-			ServerPort:  int(serverPort),
-			LocalHost:   localHost,
-			LocalPort:   int(localPort),
-			RemotePort:  int(remotePort),
-			Password:    password,
+			Username:   username,
+			ServerHost: serverHost,
+			ServerPort: int(serverPort),
+			LocalHost:  localHost,
+			LocalPort:  int(localPort),
+			RemotePort: int(remotePort),
+			Password:   password,
 		}
 
 		sendStartCommand(config)
@@ -1189,4 +1196,3 @@ func handleTakeover(force bool) {
 
 	fmt.Printf("\n[✓] Takeover successful: %d/%d tunnels migrated\n", successCount, len(workerList))
 }
-
