@@ -25,7 +25,7 @@ type Config struct {
 	MaxOfflineCount int
 	MaxLifetime     int    // MaxLifetime in seconds; 0 means no lifetime restart
 	Transport       string // 传输模式: auto（默认，QUIC 探测成功用 QUIC，否则 TCP）/ quic / tcp
-	Proto           string // 反向转发协议: tcp（默认，存量零影响）/ udp（UDP 业务穿透）
+	Proto           string // 反向转发协议: both（默认，同端口 TCP+UDP 双栈）/ tcp / udp
 	Version         string
 }
 
