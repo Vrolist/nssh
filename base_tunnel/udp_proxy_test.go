@@ -174,7 +174,252 @@ func TestUDPProxyFlowEcho(t *testing.T) {
 	}
 }
 
+// v2 帧编解码：元数据 + payload 往返，含 len=0 / frag_cnt=1 / frag_idx=254(cnt=255) 边界
+func TestUDPFrameV2RoundTrip(t *testing.T) {
+	cases := []struct {
+		name    string
+		meta    udpFrameMeta
+		payload []byte
+	}{
+		{"non-fragment empty", udpFrameMeta{flowID: 1, fragCnt: 1}, nil},
+		{"max flow id", udpFrameMeta{flowID: 0xFFFFFFFF, flags: udpFrameFlagFragment, fragID: 0xABCD, fragIdx: 254, fragCnt: 255}, bytes.Repeat([]byte{0x5A}, 64)},
+		{"single frag", udpFrameMeta{flowID: 7, flags: udpFrameFlagFragment, fragID: 1, fragIdx: 0, fragCnt: 1}, []byte("x")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			frame := encodeUDPFrameV2(c.meta, c.payload)
+			if len(frame) != udpFrameHeaderLenV2+len(c.payload) {
+				t.Fatalf("frame len = %d, want %d", len(frame), udpFrameHeaderLenV2+len(c.payload))
+			}
+			meta, payload, err := readUDPFrameV2(bytes.NewReader(frame))
+			if err != nil {
+				t.Fatalf("readUDPFrameV2: %v", err)
+			}
+			if meta != c.meta {
+				t.Fatalf("meta = %+v, want %+v", meta, c.meta)
+			}
+			if !bytes.Equal(payload, c.payload) {
+				t.Fatal("payload mismatch")
+			}
+		})
+	}
+}
+
+// v2 截断流（半帧）应返回错误而非 panic
+func TestReadUDPFrameV2Truncated(t *testing.T) {
+	full := encodeUDPFrameV2(udpFrameMeta{flowID: 1, fragCnt: 1}, []byte("hello"))
+	if _, _, err := readUDPFrameV2(bytes.NewReader(full[:5])); err == nil {
+		t.Fatal("truncated header should error")
+	}
+	if _, _, err := readUDPFrameV2(bytes.NewReader(full[:udpFrameHeaderLenV2+2])); err == nil {
+		t.Fatal("truncated payload should error")
+	}
+}
+
+// v1 回落：未协商分片时超限报文静默丢弃（非致命），限内走 v1 帧
+func TestUDPProxyWriteDatagramV1Fallback(t *testing.T) {
+	ch := &bufChannel{}
+	p := &udpProxy{ch: ch, fragEnabled: false}
+	if !p.writeDatagram(1, bytes.Repeat([]byte{1}, udpMaxPacketSize+1)) {
+		t.Fatal("oversize should be dropped non-fatally (return true)")
+	}
+	if ch.Len() != 0 {
+		t.Fatalf("oversize should not be written, got %d bytes", ch.Len())
+	}
+	if !p.writeDatagram(1, []byte("ok")) {
+		t.Fatal("writeDatagram(ok) returned false")
+	}
+	flowID, payload, err := readUDPFrame(bytes.NewReader(ch.Snapshot()))
+	if err != nil || flowID != 1 || string(payload) != "ok" {
+		t.Fatalf("v1 frame: flowID=%d payload=%q err=%v", flowID, payload, err)
+	}
+}
+
+// v2 整包：≤ fragPayloadMax 走非分片帧（frag_cnt=1, flags 无分片位）
+func TestUDPProxyWriteDatagramSingleFrame(t *testing.T) {
+	ch := &bufChannel{}
+	p := &udpProxy{ch: ch, fragEnabled: true, fragPayloadMax: 100}
+	if !p.writeDatagram(3, []byte("small")) {
+		t.Fatal("writeDatagram returned false")
+	}
+	meta, payload, err := readUDPFrameV2(bytes.NewReader(ch.Snapshot()))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if meta.flags&udpFrameFlagFragment != 0 || meta.fragCnt != 1 || meta.flowID != 3 {
+		t.Fatalf("meta = %+v", meta)
+	}
+	if string(payload) != "small" {
+		t.Fatalf("payload = %q", payload)
+	}
+}
+
+// v2 分片：超 fragPayloadMax 按序切分，共享 frag_id，解帧后与原文一致
+func TestUDPProxyWriteDatagramFragment(t *testing.T) {
+	ch := &bufChannel{}
+	p := &udpProxy{ch: ch, fragEnabled: true, fragPayloadMax: 100}
+	payload := bytes.Repeat([]byte{0x11}, 250) // 3 片：100/100/50
+	if !p.writeDatagram(5, payload) {
+		t.Fatal("writeDatagram returned false")
+	}
+	r := bytes.NewReader(ch.Snapshot())
+	var got []byte
+	var fragID uint16
+	var fragCnt byte
+	seen := 0
+	for {
+		meta, frag, err := readUDPFrameV2(r)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode frame %d: %v", seen, err)
+		}
+		if meta.flowID != 5 || meta.flags&udpFrameFlagFragment == 0 {
+			t.Fatalf("meta = %+v", meta)
+		}
+		if seen == 0 {
+			fragCnt, fragID = meta.fragCnt, meta.fragID
+		}
+		if meta.fragCnt != fragCnt || meta.fragID != fragID || int(meta.fragIdx) != seen {
+			t.Fatalf("fragment %d out of order: %+v", seen, meta)
+		}
+		seen++
+		got = append(got, frag...)
+	}
+	if seen != 3 {
+		t.Fatalf("fragment count = %d, want 3", seen)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("reassembled payload mismatch")
+	}
+}
+
+// 重组器：乱序收齐后交付，且按 frag_idx 有序拼接
+func TestUDPReassemblerOutOfOrder(t *testing.T) {
+	r := newUDPReassembler()
+	mk := func(idx byte) udpFrameMeta {
+		return udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 9, fragIdx: idx, fragCnt: 3}
+	}
+	// 乱序：2 → 0 → 1
+	if _, ok := r.add(1, mk(2), []byte("CC")); ok {
+		t.Fatal("incomplete should not deliver")
+	}
+	if _, ok := r.add(1, mk(0), []byte("AA")); ok {
+		t.Fatal("incomplete should not deliver")
+	}
+	got, ok := r.add(1, mk(1), []byte("BB"))
+	if !ok {
+		t.Fatal("should deliver after complete")
+	}
+	if string(got) != "AABBCC" {
+		t.Fatalf("got %q, want AABBCC", got)
+	}
+}
+
+// 重组器：重复片丢弃整槽（不交付）
+func TestUDPReassemblerDuplicateDropsSlot(t *testing.T) {
+	r := newUDPReassembler()
+	m0 := udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 3, fragIdx: 0, fragCnt: 2}
+	m1 := udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 3, fragIdx: 1, fragCnt: 2}
+	if _, ok := r.add(1, m0, []byte("a")); ok {
+		t.Fatal("incomplete should not deliver")
+	}
+	if _, ok := r.add(1, m0, []byte("a")); ok {
+		t.Fatal("duplicate fragment should drop the slot")
+	}
+	// 槽已被丢弃：后续片重建新槽、不完整、不交付
+	if _, ok := r.add(1, m1, []byte("b")); ok {
+		t.Fatal("slot was dropped, should not complete")
+	}
+}
+
+// 重组器：越界 / frag_cnt 非法 / frag_cnt 不一致重建槽
+func TestUDPReassemblerInvalidAndMismatch(t *testing.T) {
+	r := newUDPReassembler()
+	if _, ok := r.add(1, udpFrameMeta{flowID: 1, fragIdx: 2, fragCnt: 2}, []byte("x")); ok {
+		t.Fatal("frag_idx >= frag_cnt should be dropped")
+	}
+	if _, ok := r.add(1, udpFrameMeta{flowID: 1, fragIdx: 0, fragCnt: 0}, []byte("x")); ok {
+		t.Fatal("frag_cnt=0 should be dropped")
+	}
+	// 同 (flow, fragID) 新 frag_cnt 覆盖旧槽
+	if _, ok := r.add(1, udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 5, fragIdx: 0, fragCnt: 3}, []byte("a")); ok {
+		t.Fatal("incomplete should not deliver")
+	}
+	if _, ok := r.add(1, udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 5, fragIdx: 0, fragCnt: 2}, []byte("b")); ok {
+		t.Fatal("incomplete should not deliver")
+	}
+	got, ok := r.add(1, udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 5, fragIdx: 1, fragCnt: 2}, []byte("c"))
+	if !ok || string(got) != "bc" {
+		t.Fatalf("got=%q ok=%v, want bc/true", got, ok)
+	}
+}
+
+// 重组器：超时槽被 sweep 回收
+func TestUDPReassemblerSweep(t *testing.T) {
+	r := newUDPReassembler()
+	r.timeout = 20 * time.Millisecond
+	if _, ok := r.add(1, udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 1, fragIdx: 0, fragCnt: 2}, []byte("a")); ok {
+		t.Fatal("incomplete should not deliver")
+	}
+	time.Sleep(40 * time.Millisecond)
+	r.sweep()
+	if len(r.slots) != 0 {
+		t.Fatalf("slots = %d, want 0 after sweep", len(r.slots))
+	}
+}
+
+// 重组器：并发槽数超限时新片被拒（防内存放大）
+func TestUDPReassemblerMaxConcurrent(t *testing.T) {
+	r := newUDPReassembler()
+	r.maxConcurrent = 2
+	for i := 0; i < 2; i++ {
+		if _, ok := r.add(1, udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: uint16(i + 1), fragIdx: 0, fragCnt: 2}, []byte("a")); ok {
+			t.Fatal("incomplete should not deliver")
+		}
+	}
+	if _, ok := r.add(1, udpFrameMeta{flowID: 1, flags: udpFrameFlagFragment, fragID: 3, fragIdx: 0, fragCnt: 2}, []byte("a")); ok {
+		t.Fatal("over-concurrent fragment should be rejected")
+	}
+	if len(r.slots) != 2 {
+		t.Fatalf("slots = %d, want 2", len(r.slots))
+	}
+}
+
+// readDatagram：乱序分片经重组后交付完整报文；未收齐帧返回 ok=false
+func TestUDPProxyReadDatagramReassembles(t *testing.T) {
+	var stream bytes.Buffer
+	stream.Write(encodeUDPFrameV2(udpFrameMeta{flowID: 8, flags: udpFrameFlagFragment, fragID: 1, fragIdx: 2, fragCnt: 3}, []byte("CC")))
+	stream.Write(encodeUDPFrameV2(udpFrameMeta{flowID: 8, flags: udpFrameFlagFragment, fragID: 1, fragIdx: 0, fragCnt: 3}, []byte("AA")))
+	stream.Write(encodeUDPFrameV2(udpFrameMeta{flowID: 8, flags: udpFrameFlagFragment, fragID: 1, fragIdx: 1, fragCnt: 3}, []byte("BB")))
+
+	p := &udpProxy{ch: &readerChannel{r: &stream}, fragEnabled: true}
+	p.reasm = newUDPReassembler()
+
+	for i := 0; i < 2; i++ {
+		if _, _, ok, err := p.readDatagram(); err != nil || ok {
+			t.Fatalf("frame %d: ok=%v err=%v, want ok=false", i, ok, err)
+		}
+	}
+	flowID, payload, ok, err := p.readDatagram()
+	if err != nil || !ok || flowID != 8 || string(payload) != "AABBCC" {
+		t.Fatalf("reassembled: flowID=%d payload=%q ok=%v err=%v", flowID, payload, ok, err)
+	}
+}
+
 // --- 测试辅助 ---
+
+// readerChannel 从 reader 读、吞掉写的 channel（readDatagram 单测用）
+type readerChannel struct{ r io.Reader }
+
+func (c *readerChannel) Read(b []byte) (int, error)                     { return c.r.Read(b) }
+func (c *readerChannel) Write(b []byte) (int, error)                    { return len(b), nil }
+func (c *readerChannel) Close() error                                   { return nil }
+func (c *readerChannel) CloseWrite() error                              { return nil }
+func (c *readerChannel) SendRequest(string, bool, []byte) (bool, error) { return true, nil }
+func (c *readerChannel) Extended() io.ReadWriter                        { return nil }
+func (c *readerChannel) Stderr() io.ReadWriter                          { return nil }
 
 // noopChannel 空转 channel（flow 表单测用，吞掉 pump 写出的帧）
 type noopChannel struct{}

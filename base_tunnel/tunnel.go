@@ -267,26 +267,26 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 	// - tcp（默认）：现状路径，一行不动
 	switch config.Proto {
 	case "udp":
-		udpCh, actualPort, err := setupUDPForward(client, config)
+		udpSess, err := setupUDPForward(client, config)
 		if err != nil {
 			client.Close()
 			transportConn.Close()
 			statsManager.RecordFailure()
 			return fmt.Errorf("failed to setup UDP forward: %w", err)
 		}
-		go runUDPProxy(connCtx, udpCh, config, actualPort)
+		go runUDPProxy(connCtx, udpSess, config)
 	case "both":
 		// TCP 声明：沿用现状路径（声明失败会关闭连接触发上层重连）
 		setupTCPForward(client, channelHandler, connCtx, config)
 		// UDP 声明：失败视为整条隧道失败，返回错误触发重连循环
-		udpCh, actualPort, err := setupUDPForward(client, config)
+		udpSess, err := setupUDPForward(client, config)
 		if err != nil {
 			client.Close()
 			transportConn.Close()
 			statsManager.RecordFailure()
 			return fmt.Errorf("failed to setup UDP forward (dual-stack): %w", err)
 		}
-		go runUDPProxy(connCtx, udpCh, config, actualPort)
+		go runUDPProxy(connCtx, udpSess, config)
 		logger.Info("Dual-stack tunnel established! Remote listener: 0.0.0.0:%d (tcp+udp), Local target: %s:%d", config.RemotePort, config.LocalHost, config.LocalPort)
 	default:
 		setupTCPForward(client, channelHandler, connCtx, config)
