@@ -12,6 +12,11 @@ import (
 // BuildVersion 由 main 包注入，记录客户端版本号
 var BuildVersion = "dev"
 
+// udpDefaultSocketBuffer UDP flow socket 内核收发缓冲默认值（256KB）。
+// 旧实现硬编码 1MB（每 flow 读写各 1MB），flow 规模化时内存开销显著；下调默认值后
+// 大吞吐场景可通过 NSSH_UDP_SOCKET_BUFFER 调大；设为负数则走内核默认（不显式设置）。
+const udpDefaultSocketBuffer = 262144
+
 type Config struct {
 	ServerHost      string
 	ServerPort      int
@@ -26,6 +31,7 @@ type Config struct {
 	MaxLifetime     int    // MaxLifetime in seconds; 0 means no lifetime restart
 	Transport       string // 传输模式: auto（默认，QUIC 探测成功用 QUIC，否则 TCP）/ quic / tcp
 	Proto           string // 反向转发协议: both（默认，同端口 TCP+UDP 双栈）/ tcp / udp
+	UDPSocketBuffer int    // UDP flow socket 内核收发缓冲（字节）；默认 256KB，<0 = 走内核默认
 	Version         string
 }
 
@@ -46,18 +52,19 @@ type Config struct {
 
 func LoadConfig(reverseTunnel string, port int, password string, sshKey string, reconnectDelay int) *Config {
 	config := &Config{
-		ServerHost:     getEnv("SERVER_HOST", "0.0.0.0"),
-		ServerPort:     getEnvInt("SERVER_PORT", 20022),
-		Username:       getEnv("USERNAME", ""),
-		Password:       getEnv("PASSWORD", ""),
-		SSHKeyPath:     getEnv("SSH_KEY", ""),
-		LocalHost:      "localhost",
-		LocalPort:      getEnvInt("LOCAL_PORT", 80),
-		RemotePort:     getEnvInt("REMOTE_PORT", 8000),
-		ReconnectDelay: getEnvInt("RECONNECT_DELAY", 30),
-		MaxLifetime:    getEnvInt("MAX_LIFETIME", 172800),
-		Transport:      getEnv("NSSH_TRANSPORT", "auto"),
-		Proto:          NormalizeProto(getEnv("NSSH_PROTO", "both")),
+		ServerHost:      getEnv("SERVER_HOST", "0.0.0.0"),
+		ServerPort:      getEnvInt("SERVER_PORT", 20022),
+		Username:        getEnv("USERNAME", ""),
+		Password:        getEnv("PASSWORD", ""),
+		SSHKeyPath:      getEnv("SSH_KEY", ""),
+		LocalHost:       "localhost",
+		LocalPort:       getEnvInt("LOCAL_PORT", 80),
+		RemotePort:      getEnvInt("REMOTE_PORT", 8000),
+		ReconnectDelay:  getEnvInt("RECONNECT_DELAY", 30),
+		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
+		Transport:       getEnv("NSSH_TRANSPORT", "auto"),
+		Proto:           NormalizeProto(getEnv("NSSH_PROTO", "both")),
+		UDPSocketBuffer: getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
 	}
 
 	args := flag.Args()
@@ -144,6 +151,7 @@ func LoadConfigFromEnv() *Config {
 		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
 		Transport:       getEnv("NSSH_TRANSPORT", "auto"),
 		Proto:           NormalizeProto(getEnv("NSSH_PROTO", "both")),
+		UDPSocketBuffer: getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
 		Version:         BuildVersion,
 	}
 }

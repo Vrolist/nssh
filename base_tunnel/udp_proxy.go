@@ -45,9 +45,14 @@ const (
 	udpFlowIdleTimeout = 330 * time.Second
 	// udpFlowCleanupInterval flow 空闲扫描周期
 	udpFlowCleanupInterval = 30 * time.Second
-	// udpReadBuffer UDP socket 收发缓冲
-	udpReadBufferSize = 1024 * 1024
 )
+
+// udpReadBufPool 读缓冲池：pump 每 flow 一个 65KB 缓冲是 flow 规模化的内存大头，
+// 改为按单报文上限（udpMaxPacketSize）尺寸复用。多出 1 字节用于识别超限报文
+// （读满即判超限丢弃，与原「读入大缓冲再比较」的可观测行为一致）。
+var udpReadBufPool = sync.Pool{
+	New: func() interface{} { return make([]byte, udpMaxPacketSize+1) },
+}
 
 // encodeUDPFrame 编码一帧 UDP 数据：flow_id(4B 大端) + len(2B 大端) + payload。
 // 调用方须保证 len(payload) <= udpMaxPacketSize（socket 读侧已丢弃超限报文）。
@@ -137,7 +142,8 @@ func (f *udpClientFlow) remove() {
 
 // pump 本地服务 → 服务端方向：读 connected socket 回包，帧化后写 channel
 func (f *udpClientFlow) pump() {
-	buf := make([]byte, 65527)
+	buf := udpReadBufPool.Get().([]byte)
+	defer udpReadBufPool.Put(buf)
 	for {
 		n, err := f.uplink.Read(buf)
 		if err != nil {
@@ -160,6 +166,9 @@ type udpProxy struct {
 	ch          ssh.Channel
 	localAddr   *net.UDPAddr
 	idleTimeout time.Duration
+
+	// socketBuffer UDP flow socket 内核收发缓冲（字节）：>0 时按配置设置，<=0 走内核默认（O1）
+	socketBuffer int
 
 	flows sync.Map // flow_id (uint32) -> *udpClientFlow
 }
@@ -185,8 +194,11 @@ func (p *udpProxy) getOrCreateFlow(flowID uint32) *udpClientFlow {
 		// 本地服务不可达：丢弃该报文（UDP 语义），下个包重试拨号
 		return nil
 	}
-	_ = uplink.SetReadBuffer(udpReadBufferSize)
-	_ = uplink.SetWriteBuffer(udpReadBufferSize)
+	if p.socketBuffer > 0 {
+		// O1：按配置设置内核收发缓冲（<=0 走内核默认，不显式设置）
+		_ = uplink.SetReadBuffer(p.socketBuffer)
+		_ = uplink.SetWriteBuffer(p.socketBuffer)
+	}
 
 	flow := &udpClientFlow{
 		flowID: flowID,
@@ -236,9 +248,10 @@ func runUDPProxy(ctx context.Context, ch ssh.Channel, config *base_core.Config, 
 	}
 
 	p := &udpProxy{
-		ch:          ch,
-		localAddr:   localAddr,
-		idleTimeout: udpFlowIdleTimeout,
+		ch:           ch,
+		localAddr:    localAddr,
+		idleTimeout:  udpFlowIdleTimeout,
+		socketBuffer: config.UDPSocketBuffer,
 	}
 
 	// 清理循环：ctx 取消时关 channel + 全部 flow，各读循环随之退出
