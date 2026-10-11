@@ -221,7 +221,11 @@ func main() {
 	}
 
 	if *stopDaemonCmd {
-		sendManagementCommand(daemon.CMD_STOP_DAEMON, "")
+		if err := stopDaemon(); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Success: daemon stopped")
 		return
 	}
 
@@ -691,6 +695,69 @@ func sendManagementCommandJSON(cmd int, username string) {
 		os.Exit(1)
 	}
 	fmt.Println(string(data))
+}
+
+// stopDaemon 停止后台 daemon，兼容不认识 CMD_STOP_DAEMON 的旧版本（< v0.32.2）。
+// 旧 daemon 对未知命令回 "unknown command"，此时按 daemon PID 直接发 SIGTERM，
+// 确保升级时旧 daemon 一定能退出——否则换掉磁盘二进制后，运行中的旧 daemon 仍以
+// 老代码托管 worker，新版本永远不生效（典型：老 daemon 不认识 CMD_START 的 proto
+// 参数，udp/both 被静默降级为 tcp-only）。
+func stopDaemon() error {
+	// 幂等：daemon 未运行视为已停止（也避免把残留 PID 文件里的过期 PID 当成目标误杀）
+	if status, _ := base_core.CheckDaemonStatus(); status != base_core.DaemonRunning {
+		return nil
+	}
+	transport := daemon.NewTransport()
+	timestamp := time.Now().Unix()
+
+	if respStr, err := transport.SendCommand(daemon.CMD_STOP_DAEMON, map[string]string{}, timestamp); err == nil {
+		var resp daemon.Response
+		if json.Unmarshal([]byte(respStr), &resp) == nil && resp.Success {
+			return waitDaemonGone(5 * time.Second)
+		}
+	}
+
+	// 回退：旧 daemon 不识别停止命令，直接按 PID 发信号
+	pid := daemonPID(transport, timestamp)
+	if pid <= 0 {
+		return fmt.Errorf("daemon does not support --stop-daemon and its PID is unknown")
+	}
+	if err := base_core.TerminateProcess(pid); err != nil {
+		return fmt.Errorf("failed to signal daemon (pid %d): %w", pid, err)
+	}
+	return waitDaemonGone(5 * time.Second)
+}
+
+// daemonPID 查询运行中 daemon 的 PID：优先协议命令 CMD_GET_DAEMON_PID，回退 PID 文件。
+func daemonPID(transport daemon.Transport, timestamp int64) int {
+	if respStr, err := transport.SendCommand(daemon.CMD_GET_DAEMON_PID, map[string]string{}, timestamp); err == nil {
+		var resp daemon.Response
+		if json.Unmarshal([]byte(respStr), &resp) == nil && resp.Success {
+			if data, ok := resp.Data.(map[string]interface{}); ok {
+				if v, ok := data["daemon_pid"].(float64); ok {
+					return int(v)
+				}
+			}
+		}
+	}
+	if b, err := os.ReadFile(base_core.GetDaemonPIDFilePath()); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+			return pid
+		}
+	}
+	return 0
+}
+
+// waitDaemonGone 等待 daemon 退出（Unix 以 socket 是否可连接判定）。
+func waitDaemonGone(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if status, _ := base_core.CheckDaemonStatus(); status != base_core.DaemonRunning {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("daemon still running after %s", timeout)
 }
 
 // jsonQuote 将字符串转义为合法JSON字符串字面量（含引号）
