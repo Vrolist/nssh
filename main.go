@@ -63,6 +63,7 @@ func main() {
 	stopCmd := pflag.String("stop", "", "Stop process by username")
 	logCmd := pflag.String("log", "", "View log by username")
 	stopAllCmd := pflag.Bool("stop-all", false, "Stop all background processes")
+	stopDaemonCmd := pflag.Bool("stop-daemon", false, "Stop the background daemon process (all tunnels stop; daemon exits)")
 	restartAllCmd := pflag.Bool("restart-all", false, "Restart all background processes")
 	takeoverCmd := pflag.Bool("takeover", false, "Takeover running nssh version")
 	takeoverForceCmd := pflag.Bool("takeover-force", false, "Force takeover without confirmation")
@@ -219,6 +220,11 @@ func main() {
 		return
 	}
 
+	if *stopDaemonCmd {
+		sendManagementCommand(daemon.CMD_STOP_DAEMON, "")
+		return
+	}
+
 	if *restartAllCmd {
 		restartAllProcesses()
 		return
@@ -295,6 +301,7 @@ func printUsage() {
 	fmt.Println("      --list         list all tunnels")
 	fmt.Println("      --stop user    stop a tunnel")
 	fmt.Println("      --stop-all     stop all tunnels")
+	fmt.Println("      --stop-daemon  stop the background daemon (all tunnels stop, daemon exits)")
 	fmt.Println("      --restart user restart a tunnel")
 	fmt.Println("  -v, --version      show version")
 	fmt.Println()

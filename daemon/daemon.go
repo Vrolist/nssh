@@ -489,6 +489,8 @@ func (d *Daemon) handleTransportCommand(cmd int, params map[string]string, key s
 		return d.handleGetDaemonPIDTransport()
 	case CMD_GET_VERSION:
 		return d.handleGetVersionTransport()
+	case CMD_STOP_DAEMON:
+		return d.handleStopDaemonTransport()
 	case CMD_TAKEOVER:
 		return d.handleTakeover(params, key, timestamp)
 	default:
@@ -729,6 +731,29 @@ func (d *Daemon) handleGetVersionTransport() string {
 		"version": d.version,
 	}}
 	b, _ := json.Marshal(resp)
+	return string(b) + "\n"
+}
+
+// handleStopDaemonTransport 处理 CLI 的 --stop-daemon：令 daemon 进程退出。
+// 用途：worker 是 daemon 进程内的 goroutine，其代码 = daemon 进程的代码；二进制升级后
+// 仅 restart-all 只会用「老 daemon 的老代码」重建 worker，新版本不生效
+//（典型：v0.32.0 daemon 不认识 CMD_START 的 proto 参数，udp/both 被静默降级为 tcp）。
+// 故升级后须让旧 daemon 退出，下一次 Start 才会用新二进制拉起新 daemon。
+// 响应先回给 CLI，再异步退出，避免 CLI 收不到回执。
+func (d *Daemon) handleStopDaemonTransport() string {
+	resp := Response{Success: true, Data: map[string]interface{}{
+		"message": "daemon shutting down",
+		"pid":     os.Getpid(),
+	}}
+	b, _ := json.Marshal(resp)
+	go func() {
+		// 小延迟：handler 返回后传输层才把响应写回 CLI，先等回执发出再退出
+		time.Sleep(200 * time.Millisecond)
+		d.logger.Info("Daemon shutdown requested via --stop-daemon, exiting to allow binary upgrade")
+		_ = d.transport.Stop()
+		removePIDFile()
+		os.Exit(0)
+	}()
 	return string(b) + "\n"
 }
 
