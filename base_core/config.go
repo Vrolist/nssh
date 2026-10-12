@@ -17,22 +17,30 @@ var BuildVersion = "dev"
 // 大吞吐场景可通过 NSSH_UDP_SOCKET_BUFFER 调大；设为负数则走内核默认（不显式设置）。
 const udpDefaultSocketBuffer = 262144
 
+// udpDefaultMaxPacketSize UDP 单报文上限默认值（O6）：未协商分片（v1 回落）时的整包上限。
+const udpDefaultMaxPacketSize = 1400
+
+// udpDefaultFlowIdleTimeout UDP flow 空闲回收默认值（O6，秒）：> 服务端 QUIC 空闲 300s + keepalive 30s。
+const udpDefaultFlowIdleTimeout = 330
+
 type Config struct {
-	ServerHost      string
-	ServerPort      int
-	Username        string
-	Password        string
-	SSHKeyPath      string
-	LocalHost       string
-	LocalPort       int
-	RemotePort      int
-	ReconnectDelay  int
-	MaxOfflineCount int
-	MaxLifetime     int    // MaxLifetime in seconds; 0 means no lifetime restart
-	Transport       string // 传输模式: auto（默认，QUIC 探测成功用 QUIC，否则 TCP）/ quic / tcp
-	Proto           string // 反向转发协议: both（默认，同端口 TCP+UDP 双栈）/ tcp / udp
-	UDPSocketBuffer int    // UDP flow socket 内核收发缓冲（字节）；默认 256KB，<0 = 走内核默认
-	Version         string
+	ServerHost         string
+	ServerPort         int
+	Username           string
+	Password           string
+	SSHKeyPath         string
+	LocalHost          string
+	LocalPort          int
+	RemotePort         int
+	ReconnectDelay     int
+	MaxOfflineCount    int
+	MaxLifetime        int    // MaxLifetime in seconds; 0 means no lifetime restart
+	Transport          string // 传输模式: auto（默认，QUIC 探测成功用 QUIC，否则 TCP）/ quic / tcp
+	Proto              string // 反向转发协议: both（默认，同端口 TCP+UDP 双栈）/ tcp / udp
+	UDPSocketBuffer    int    // UDP flow socket 内核收发缓冲（字节）；默认 256KB，<0 = 走内核默认
+	UDPMaxPacketSize   int    // UDP 单报文上限（字节，v1 回落口径）；默认 1400，服务端协商值优先（O6 口径对齐）
+	UDPFlowIdleTimeout int    // UDP flow 空闲回收（秒）；默认 330
+	Version            string
 }
 
 // 【daemon; worker】Config 结构体内存占用分析：
@@ -52,19 +60,21 @@ type Config struct {
 
 func LoadConfig(reverseTunnel string, port int, password string, sshKey string, reconnectDelay int) *Config {
 	config := &Config{
-		ServerHost:      getEnv("SERVER_HOST", "0.0.0.0"),
-		ServerPort:      getEnvInt("SERVER_PORT", 20022),
-		Username:        getEnv("USERNAME", ""),
-		Password:        getEnv("PASSWORD", ""),
-		SSHKeyPath:      getEnv("SSH_KEY", ""),
-		LocalHost:       "localhost",
-		LocalPort:       getEnvInt("LOCAL_PORT", 80),
-		RemotePort:      getEnvInt("REMOTE_PORT", 8000),
-		ReconnectDelay:  getEnvInt("RECONNECT_DELAY", 30),
-		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
-		Transport:       getEnv("NSSH_TRANSPORT", "auto"),
-		Proto:           NormalizeProto(getEnv("NSSH_PROTO", "both")),
-		UDPSocketBuffer: getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
+		ServerHost:         getEnv("SERVER_HOST", "0.0.0.0"),
+		ServerPort:         getEnvInt("SERVER_PORT", 20022),
+		Username:           getEnv("USERNAME", ""),
+		Password:           getEnv("PASSWORD", ""),
+		SSHKeyPath:         getEnv("SSH_KEY", ""),
+		LocalHost:          "localhost",
+		LocalPort:          getEnvInt("LOCAL_PORT", 80),
+		RemotePort:         getEnvInt("REMOTE_PORT", 8000),
+		ReconnectDelay:     getEnvInt("RECONNECT_DELAY", 30),
+		MaxLifetime:        getEnvInt("MAX_LIFETIME", 172800),
+		Transport:          getEnv("NSSH_TRANSPORT", "auto"),
+		Proto:              NormalizeProto(getEnv("NSSH_PROTO", "both")),
+		UDPSocketBuffer:    getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
+		UDPMaxPacketSize:   getEnvInt("NSSH_UDP_MAX_PACKET_SIZE", udpDefaultMaxPacketSize),
+		UDPFlowIdleTimeout: getEnvInt("NSSH_UDP_FLOW_IDLE_TIMEOUT", udpDefaultFlowIdleTimeout),
 	}
 
 	args := flag.Args()
@@ -138,21 +148,23 @@ func getEnvInt(key string, defaultValue int) int {
 
 func LoadConfigFromEnv() *Config {
 	return &Config{
-		ServerHost:      getEnv("NSSH_SERVER_HOST", ""),
-		ServerPort:      getEnvInt("NSSH_SERVER_PORT", 0),
-		Username:        getEnv("NSSH_USERNAME", ""),
-		Password:        getEnv("NSSH_PASSWORD", ""),
-		SSHKeyPath:      getEnv("NSSH_SSH_KEY", ""),
-		LocalHost:       getEnv("NSSH_LOCAL_HOST", "localhost"),
-		LocalPort:       getEnvInt("NSSH_LOCAL_PORT", 0),
-		RemotePort:      getEnvInt("NSSH_REMOTE_PORT", 0),
-		ReconnectDelay:  getEnvInt("RECONNECT_DELAY", 60),
-		MaxOfflineCount: getEnvInt("MAX_OFFLINE_COUNT", 14400),
-		MaxLifetime:     getEnvInt("MAX_LIFETIME", 172800),
-		Transport:       getEnv("NSSH_TRANSPORT", "auto"),
-		Proto:           NormalizeProto(getEnv("NSSH_PROTO", "both")),
-		UDPSocketBuffer: getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
-		Version:         BuildVersion,
+		ServerHost:         getEnv("NSSH_SERVER_HOST", ""),
+		ServerPort:         getEnvInt("NSSH_SERVER_PORT", 0),
+		Username:           getEnv("NSSH_USERNAME", ""),
+		Password:           getEnv("NSSH_PASSWORD", ""),
+		SSHKeyPath:         getEnv("NSSH_SSH_KEY", ""),
+		LocalHost:          getEnv("NSSH_LOCAL_HOST", "localhost"),
+		LocalPort:          getEnvInt("NSSH_LOCAL_PORT", 0),
+		RemotePort:         getEnvInt("NSSH_REMOTE_PORT", 0),
+		ReconnectDelay:     getEnvInt("RECONNECT_DELAY", 60),
+		MaxOfflineCount:    getEnvInt("MAX_OFFLINE_COUNT", 14400),
+		MaxLifetime:        getEnvInt("MAX_LIFETIME", 172800),
+		Transport:          getEnv("NSSH_TRANSPORT", "auto"),
+		Proto:              NormalizeProto(getEnv("NSSH_PROTO", "both")),
+		UDPSocketBuffer:    getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
+		UDPMaxPacketSize:   getEnvInt("NSSH_UDP_MAX_PACKET_SIZE", udpDefaultMaxPacketSize),
+		UDPFlowIdleTimeout: getEnvInt("NSSH_UDP_FLOW_IDLE_TIMEOUT", udpDefaultFlowIdleTimeout),
+		Version:            BuildVersion,
 	}
 }
 

@@ -43,11 +43,17 @@ const (
 	udpCapsChannel byte = 0x01
 	// udpCapsFrag 客户端能力位 bit1：支持分片帧（O3，与节点侧 bit1 对齐）
 	udpCapsFrag byte = 0x02
+	// udpCapsShard 客户端能力位 bit3：支持多 channel 分片（O5，与节点侧 bit3 对齐）
+	udpCapsShard byte = 0x08
 
-	// udpMaxPacketSize 未协商分片时的单报文上限（v1 口径，超出丢弃；OpenVPN 建议配 tun-mtu 1200）
+	// udpMaxPacketSize 未协商分片时的单报文上限兜底（v1 口径；配置 NSSH_UDP_MAX_PACKET_SIZE 覆盖，
+	// 服务端 reply 协商值优先）。OpenVPN 建议配 tun-mtu 1200。
 	udpMaxPacketSize = 1400
 	// udpMaxDatagramSize UDP 载荷理论上限：协商分片后单条报文（重组后）可达此值
 	udpMaxDatagramSize = 65507
+
+	// udpMaxShardCount 多 channel 分片（O5）上限：防止服务端误配导致客户端开过多 channel
+	udpMaxShardCount = 32
 
 	// udpFrameHeaderLen v1 帧头长度：flow_id 4B + len 2B
 	udpFrameHeaderLen = 6
@@ -55,30 +61,29 @@ const (
 	udpFrameHeaderLenV2 = 11
 	// udpFrameFlagFragment v2 flags bit0：1 = 分片
 	udpFrameFlagFragment byte = 0x01
+	// udpFrameFlagKeepalive v2 flags bit1：1 = 应用层保活（O6，只刷各端 flow lastSeen，不透传业务）
+	udpFrameFlagKeepalive byte = 0x02
 
 	// udpReassemblyTimeout 重组槽超时（收不齐即丢整槽，不重传）
 	udpReassemblyTimeout = 300 * time.Millisecond
 	// udpMaxReassembliesPerFlow 并发重组槽上限（防内存放大）
 	udpMaxReassembliesPerFlow = 16
 
-	// udpFlowIdleTimeout flow 空闲回收：> 服务端 QUIC 空闲 300s + keepalive 30s，与 L4LB UDP 对齐
+	// udpFlowIdleTimeout flow 空闲回收兜底（配置 NSSH_UDP_FLOW_IDLE_TIMEOUT 覆盖）：
+	// > 服务端 QUIC 空闲 300s + keepalive 30s，与 L4LB UDP 对齐
 	udpFlowIdleTimeout = 330 * time.Second
 	// udpFlowCleanupInterval flow 空闲扫描周期
 	udpFlowCleanupInterval = 30 * time.Second
+
+	// —— O6 应用层 keepalive ——
+	// 仅对「协商分片（v2）」生效：老服务端无 v2 帧头，无法识别保活标记（兼容红线：不发送即可）。
+	// udpFlowKeepaliveInterval 保活检查/发送周期
+	udpFlowKeepaliveInterval = 60 * time.Second
+	// udpFlowKeepaliveIdle flow 空闲超过此值才发保活（避免与正常流量重复）
+	udpFlowKeepaliveIdle = 90 * time.Second
+	// udpFlowKeepaliveMax 单 flow 最多保活次数（≈1 小时），之后停发让 flow 正常回收，防止死流永久占位
+	udpFlowKeepaliveMax = 30
 )
-
-// udpReadBufPool 读缓冲池（v1）：pump 每 flow 一个 65KB 缓冲是 flow 规模化的内存大头，
-// 改为按单报文上限（udpMaxPacketSize）尺寸复用。多出 1 字节用于识别超限报文
-// （读满即判超限丢弃，与原「读入大缓冲再比较」的可观测行为一致）。
-var udpReadBufPool = sync.Pool{
-	New: func() interface{} { return make([]byte, udpMaxPacketSize+1) },
-}
-
-// udpReadBufPoolLarge 读缓冲池（v2 分片）：协商分片后 socket 读缓冲须容纳完整报文
-// （UDP 载荷理论上限 udpMaxDatagramSize），多 1 字节识别超限。
-var udpReadBufPoolLarge = sync.Pool{
-	New: func() interface{} { return make([]byte, udpMaxDatagramSize+1) },
-}
 
 // udpFrameMeta v2 帧头元数据
 type udpFrameMeta struct {
@@ -244,16 +249,27 @@ func (r *udpReassembler) sweep() {
 	}
 }
 
-// udpForwardSession UDP 转发控制面协商结果（数据面 channel + 分片能力）
+// udpShardIndex flow → channel 分片下标（O5）：两端统一 flow_id % N，确定性、无状态。
+// N<=1 时恒 0（未协商分片/单通道）。
+func udpShardIndex(flowID uint32, n int) int {
+	if n <= 1 {
+		return 0
+	}
+	return int(flowID % uint32(n))
+}
+
+// udpForwardSession UDP 转发控制面协商结果（数据面 channel + 分片/多通道能力）
 type udpForwardSession struct {
-	ch             ssh.Channel
+	chs            []ssh.Channel // 数据面 channel：N 条（O5），N=1 时为单通道基线
 	actualPort     uint32
+	shardCount     int  // 数据面 channel 条数（O5）；1 = 未启用多通道
+	maxPacketSize  int  // v1 整包上限（服务端协商值优先，O6 口径对齐）
 	fragEnabled    bool // 双端协商启用 v2 分片帧
 	fragPayloadMax int  // 单帧 payload 上限（v2）
 }
 
-// setupUDPForward 控制面：声明 UDP 转发端口并打开数据面 channel。
-// 返回协商结果（channel + 服务端实际端口 + 分片能力）。
+// setupUDPForward 控制面：声明 UDP 转发端口并打开数据面 channel（N 条）。
+// 返回协商结果（channels + 服务端实际端口 + 分片/多通道能力）。
 func setupUDPForward(client *ssh.Client, config *base_core.Config) (*udpForwardSession, error) {
 	// request payload 与 tcpip-forward 同构（addrLen+addr+port），尾部追加 1 字节能力位
 	const bindAddr = "0.0.0.0"
@@ -261,7 +277,8 @@ func setupUDPForward(client *ssh.Client, config *base_core.Config) (*udpForwardS
 	payload = binary.BigEndian.AppendUint32(payload, uint32(len(bindAddr)))
 	payload = append(payload, bindAddr...)
 	payload = binary.BigEndian.AppendUint32(payload, uint32(config.RemotePort))
-	payload = append(payload, udpCapsChannel|udpCapsFrag) // bit0 恒 1；bit1 声明本端支持分片
+	// bit0 恒 1；bit1 声明支持分片；bit3 声明支持多通道（O5，老服务端忽略未知位）
+	payload = append(payload, udpCapsChannel|udpCapsFrag|udpCapsShard)
 
 	ok, resp, err := client.SendRequest(udpForwardRequest, true, payload)
 	if err != nil {
@@ -280,39 +297,64 @@ func setupUDPForward(client *ssh.Client, config *base_core.Config) (*udpForwardS
 		return nil, fmt.Errorf("server selected unsupported UDP data mode %d", mode)
 	}
 
-	sess := &udpForwardSession{actualPort: actualPort}
-	// v2 协商：reply 扩展段 [caps 1B][maxPacketSize 2B][fragPayloadMax 2B]（共 10B）；
+	sess := &udpForwardSession{actualPort: actualPort, shardCount: 1, maxPacketSize: config.UDPMaxPacketSize}
+	if sess.maxPacketSize <= 0 {
+		sess.maxPacketSize = udpMaxPacketSize
+	}
+	// v2 协商：reply 扩展段 [caps 1B][maxPacketSize 2B][fragPayloadMax 2B][shardCount 1B]（共 11B）；
 	// 老服务端只回 5B → 保持 v1（兼容红线）；服务端未回带 frag 位 → 保持 v1。
 	if len(resp) >= 10 {
 		respCaps := resp[5]
+		srvMax := int(binary.BigEndian.Uint16(resp[6:8]))
 		srvFragMax := int(binary.BigEndian.Uint16(resp[8:10]))
+		if srvMax > 0 {
+			// O6 口径对齐：以服务端协商上限为准（避免一端 1400 一端更大导致中间静默丢）
+			sess.maxPacketSize = srvMax
+		}
 		if respCaps&udpCapsFrag != 0 && srvFragMax > 0 && srvFragMax <= udpMaxDatagramSize {
 			sess.fragEnabled = true
 			sess.fragPayloadMax = srvFragMax
 		}
 	}
-
-	// 打开数据面 channel：ExtraData 带服务端实际端口。
-	// x/crypto/ssh 两侧接收窗口默认 2MB（channelWindowSize=64×32768），实时转发场景足够，
-	// 无需 fork 定制窗口（设计稿 5.5 的 64KB 前提系记忆偏差，实测确认后修正文档）。
-	chData := make([]byte, 4)
-	binary.BigEndian.PutUint32(chData, actualPort)
-	ch, _, err := client.OpenChannel(udpChannelType, chData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open %s channel: %w", udpChannelType, err)
+	// O5 多通道协商：reply 第 11 字节为服务端裁决的 channel 条数（缺省/老端=1）
+	if len(resp) >= 11 {
+		sc := int(resp[10])
+		if sc < 1 {
+			sc = 1
+		}
+		if sc > udpMaxShardCount {
+			sc = udpMaxShardCount
+		}
+		sess.shardCount = sc
 	}
-	sess.ch = ch
+
+	// 打开 N 条数据面 channel：ExtraData = actualPort(4B) + shardIndex(1B)。
+	// 老服务端只读前 4B（忽略尾部 shard 字节），向后兼容。
+	for i := 0; i < sess.shardCount; i++ {
+		chData := make([]byte, 5)
+		binary.BigEndian.PutUint32(chData[0:4], actualPort)
+		chData[4] = byte(i)
+		ch, _, err := client.OpenChannel(udpChannelType, chData)
+		if err != nil {
+			for _, opened := range sess.chs {
+				_ = opened.Close()
+			}
+			return nil, fmt.Errorf("failed to open %s channel shard %d/%d: %w", udpChannelType, i, sess.shardCount, err)
+		}
+		sess.chs = append(sess.chs, ch)
+	}
 	return sess, nil
 }
 
 // udpClientFlow 客户端侧一条 flow：服务端分配的 flow_id ↔ 本地服务的 connected UDP socket。
 // connected socket 的 Read 只收来自本地服务的回包，天然与 flow 一一对应，无需五元组表。
 type udpClientFlow struct {
-	flowID   uint32
-	uplink   *net.UDPConn
-	lastSeen atomic.Int64
-	proxy    *udpProxy
-	removed  sync.Once
+	flowID     uint32
+	uplink     *net.UDPConn
+	lastSeen   atomic.Int64
+	keepalives atomic.Int32 // O6：已发送的保活次数（上限 udpFlowKeepaliveMax）
+	proxy      *udpProxy
+	removed    sync.Once
 }
 
 // remove 回收 flow：从表移除并关 socket（触发读循环退出）
@@ -323,7 +365,7 @@ func (f *udpClientFlow) remove() {
 	})
 }
 
-// pump 本地服务 → 服务端方向：读 connected socket 回包，帧化（按需分片）后写 channel
+// pump 本地服务 → 服务端方向：读 connected socket 回包，帧化（按需分片）后写对应 shard channel
 func (f *udpClientFlow) pump() {
 	buf := f.proxy.getReadBuf()
 	defer f.proxy.putReadBuf(buf)
@@ -342,12 +384,16 @@ func (f *udpClientFlow) pump() {
 
 // udpProxy 客户端 UDP 转发器：一条 UDP 隧道端口一个实例
 type udpProxy struct {
-	ch          ssh.Channel
+	ch          ssh.Channel   // 兼容：单通道基线（readDatagram 无参路径 / chs 为空时使用）
+	chs         []ssh.Channel // O5：数据面 channel 列表（N 条）；channelFor 由此按 flow 选片
 	localAddr   *net.UDPAddr
 	idleTimeout time.Duration
 
 	// socketBuffer UDP flow socket 内核收发缓冲（字节）：>0 时按配置设置，<=0 走内核默认（O1）
 	socketBuffer int
+
+	// maxPacketSize v1 整包上限（O6 口径对齐：服务端协商值优先，<=0 回落 udpMaxPacketSize）
+	maxPacketSize int
 
 	// 分片（O3）：fragEnabled 时使用 v2 帧头与分片/重组
 	fragEnabled    bool
@@ -355,48 +401,98 @@ type udpProxy struct {
 	nextFragID     atomic.Uint32
 	reasm          *udpReassembler
 
+	// O5：flow→channel 分片条数（= len(chs)）；<=1 表示未启用多通道
+	shardCount int
+
+	// per-proxy 池化读缓冲（尺寸随 maxPacketSize / 分片能力而定；池为 nil 时按需分配，兼容测试）
+	bufPool      *sync.Pool
+	bufPoolLarge *sync.Pool
+
+	// closeChOnce 确保数据面 channel 只关闭一次（多读循环 + ctx 取消竞争）
+	closeChOnce sync.Once
+
 	flows sync.Map // flow_id (uint32) -> *udpClientFlow
 }
 
-// getReadBuf/putReadBuf 按是否分片选取对应尺寸的池化读缓冲
+// newReadBufPool 构造定长读缓冲池
+func newReadBufPool(size int) *sync.Pool {
+	return &sync.Pool{New: func() interface{} { return make([]byte, size) }}
+}
+
+// effectiveMaxPacketSize v1 单报文上限：协商值优先，否则兜底默认
+func (p *udpProxy) effectiveMaxPacketSize() int {
+	if p.maxPacketSize > 0 {
+		return p.maxPacketSize
+	}
+	return udpMaxPacketSize
+}
+
+// udpEffectiveFlowIdleTimeout flow 空闲回收超时：配置秒数优先（<=0 回落默认值）
+func udpEffectiveFlowIdleTimeout(seconds int) time.Duration {
+	if seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return udpFlowIdleTimeout
+}
+
+// channelFor flow → 数据面 channel（O5）：flow_id % N 确定性选片；无多通道时回落单通道基线。
+func (p *udpProxy) channelFor(flowID uint32) ssh.Channel {
+	if len(p.chs) == 0 {
+		return p.ch
+	}
+	return p.chs[udpShardIndex(flowID, len(p.chs))]
+}
+
+// getReadBuf/putReadBuf 按是否分片选取对应尺寸的池化读缓冲（池为 nil 时按需分配，兼容测试）
 func (p *udpProxy) getReadBuf() []byte {
 	if p.fragEnabled {
-		return udpReadBufPoolLarge.Get().([]byte)
+		if p.bufPoolLarge != nil {
+			return p.bufPoolLarge.Get().([]byte)
+		}
+		return make([]byte, udpMaxDatagramSize+1)
 	}
-	return udpReadBufPool.Get().([]byte)
+	if p.bufPool != nil {
+		return p.bufPool.Get().([]byte)
+	}
+	return make([]byte, p.effectiveMaxPacketSize()+1)
 }
 
 func (p *udpProxy) putReadBuf(buf []byte) {
 	if p.fragEnabled {
-		udpReadBufPoolLarge.Put(buf)
+		if p.bufPoolLarge != nil {
+			p.bufPoolLarge.Put(buf)
+		}
 		return
 	}
-	udpReadBufPool.Put(buf)
+	if p.bufPool != nil {
+		p.bufPool.Put(buf)
+	}
 }
 
-// writeFrame v1 帧 → channel 写入；channel 异常（连接断开）返回 false
+// writeFrame v1 帧 → flow 对应 channel 写入；channel 异常（连接断开）返回 false
 func (p *udpProxy) writeFrame(flowID uint32, payload []byte) bool {
-	if _, err := p.ch.Write(encodeUDPFrame(flowID, payload)); err != nil {
+	if _, err := p.channelFor(flowID).Write(encodeUDPFrame(flowID, payload)); err != nil {
 		return false
 	}
 	return true
 }
 
-// writeFrameV2 v2 帧 → channel 写入
+// writeFrameV2 v2 帧 → flow 对应 channel 写入
 func (p *udpProxy) writeFrameV2(meta udpFrameMeta, payload []byte) bool {
-	if _, err := p.ch.Write(encodeUDPFrameV2(meta, payload)); err != nil {
+	if _, err := p.channelFor(meta.flowID).Write(encodeUDPFrameV2(meta, payload)); err != nil {
 		return false
 	}
 	return true
 }
 
-// writeDatagram 把一条完整 UDP 报文写入 channel：
-//   - 未协商分片（v1）：超限（> udpMaxPacketSize）丢弃（非致命，符合 UDP 语义）；
+// writeDatagram 把一条完整 UDP 报文写入 flow 对应 channel：
+//   - 未协商分片（v1）：超限（> maxPacketSize）丢弃（非致命，符合 UDP 语义）；
 //   - 已协商（v2）：≤ fragPayloadMax 走整包帧，超出按 fragPayloadMax 切分（共享 frag_id）。
+//
 // 返回 false 表示 channel 写失败（连接断开，需回收 flow）。
 func (p *udpProxy) writeDatagram(flowID uint32, payload []byte) bool {
 	if !p.fragEnabled {
-		if len(payload) > udpMaxPacketSize {
+		if len(payload) > p.effectiveMaxPacketSize() {
 			return true // 超限丢弃
 		}
 		return p.writeFrame(flowID, payload)
@@ -433,16 +529,28 @@ func (p *udpProxy) writeDatagram(flowID uint32, payload []byte) bool {
 	return true
 }
 
-// readDatagram 从 channel 读取一条完整 UDP 报文（v1 直读；v2 按需重组）。
-// ok=false 表示该帧被丢弃（分片未收齐/异常），调用方跳过继续读。
+// readDatagram 从主 channel 读取一条完整 UDP 报文（单通道基线路径；多通道由 readChannel 逐条读）。
+// ok=false 表示该帧被丢弃（分片未收齐/保活/异常），调用方跳过继续读。
 func (p *udpProxy) readDatagram() (flowID uint32, payload []byte, ok bool, err error) {
+	return p.readDatagramFrom(p.ch)
+}
+
+// readDatagramFrom 从指定 channel 读取一条完整 UDP 报文（v1 直读；v2 按需重组 / 保活帧）。
+func (p *udpProxy) readDatagramFrom(r io.Reader) (flowID uint32, payload []byte, ok bool, err error) {
 	if !p.fragEnabled {
-		flowID, payload, err = readUDPFrame(p.ch)
+		flowID, payload, err = readUDPFrame(r)
 		return flowID, payload, err == nil, err
 	}
-	meta, payload, err := readUDPFrameV2(p.ch)
+	meta, payload, err := readUDPFrameV2(r)
 	if err != nil {
 		return 0, nil, false, err
+	}
+	if meta.flags&udpFrameFlagKeepalive != 0 {
+		// O6：保活帧只刷 flow lastSeen，不透传业务
+		if val, exists := p.flows.Load(meta.flowID); exists {
+			val.(*udpClientFlow).lastSeen.Store(time.Now().UnixNano())
+		}
+		return 0, nil, false, nil
 	}
 	if meta.flags&udpFrameFlagFragment == 0 {
 		return meta.flowID, payload, true, nil
@@ -508,68 +616,37 @@ func (p *udpProxy) closeAll() {
 	})
 }
 
-// runUDPProxy 启动 UDP 转发循环（服务端 → 本地服务方向 + flow 清理），阻塞至 ctx 取消或 channel 断开。
-// 本地服务 → 服务端方向由每条 flow 的 pump goroutine 承担。
-func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core.Config) {
-	logger := base_core.GetLogger()
-	ch := sess.ch
-
-	localAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(config.LocalHost, fmt.Sprintf("%d", config.LocalPort)))
-	if err != nil {
-		logger.Error("UDP proxy: invalid local address %s:%d: %v", config.LocalHost, config.LocalPort, err)
-		_ = ch.Close()
-		return
-	}
-
-	p := &udpProxy{
-		ch:             ch,
-		localAddr:      localAddr,
-		idleTimeout:    udpFlowIdleTimeout,
-		socketBuffer:   config.UDPSocketBuffer,
-		fragEnabled:    sess.fragEnabled,
-		fragPayloadMax: sess.fragPayloadMax,
-	}
-	if p.fragEnabled {
-		p.reasm = newUDPReassembler()
-	}
-
-	// 清理循环：ctx 取消时关 channel + 全部 flow，各读循环随之退出
-	go func() {
-		ticker := time.NewTicker(udpFlowCleanupInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				_ = ch.Close()
-				p.closeAll()
-				return
-			case <-ticker.C:
-				p.sweepIdleFlows()
-				if p.reasm != nil {
-					p.reasm.sweep()
-				}
+// closeChannels 关闭全部数据面 channel（幂等：closeChOnce 保证只关一次）
+func (p *udpProxy) closeChannels() {
+	p.closeChOnce.Do(func() {
+		if len(p.chs) == 0 {
+			if p.ch != nil {
+				_ = p.ch.Close()
 			}
+			return
 		}
-	}()
+		for _, ch := range p.chs {
+			_ = ch.Close()
+		}
+	})
+}
 
-	logger.Info("[UDP] Data plane started (mode=channel, frag=%v) - Remote listener: 0.0.0.0:%d, Local target: %s:%d",
-		sess.fragEnabled, sess.actualPort, config.LocalHost, config.LocalPort)
-
-	// 服务端 → 本地服务方向：解帧（按需重组）→ 按 flow_id 建流写入
+// readChannel 单个数据面 channel 的读循环：解帧（按需重组/保活）→ 按 flow_id 建流写入本地服务。
+// 读到 channel 断开（err）即返回；全部读循环退出后 runUDPProxy 统一回收。
+func (p *udpProxy) readChannel(ch ssh.Channel) {
+	logger := base_core.GetLogger()
 	for {
-		flowID, payload, ok, err := p.readDatagram()
+		flowID, payload, ok, err := p.readDatagramFrom(ch)
 		if err != nil {
 			logger.Info("[UDP] Data channel closed: %v", err)
-			_ = ch.Close()
-			p.closeAll()
 			return
 		}
 		if !ok {
-			continue // 分片未收齐/异常帧：丢弃，继续读
+			continue // 分片未收齐/保活/异常帧：丢弃，继续读
 		}
 		flow := p.getOrCreateFlow(flowID)
 		if flow == nil {
-			base_core.GetLogger().Debug("[UDP] local dial failed (%s), packet dropped", localAddr)
+			logger.Debug("[UDP] local dial failed (%s), packet dropped", p.localAddr)
 			continue
 		}
 		if len(payload) == 0 {
@@ -580,4 +657,118 @@ func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core
 			flow.remove()
 		}
 	}
+}
+
+// sendKeepalives O6：对空闲超 udpFlowKeepaliveIdle 的 flow 发送 v2 保活帧（只刷各端 lastSeen，不透传业务）。
+// 仅在协商分片（v2）时可用——老服务端不识别保活标记；超过 udpFlowKeepaliveMax 次后停发，让 flow 正常回收。
+func (p *udpProxy) sendKeepalives() {
+	if !p.fragEnabled {
+		return
+	}
+	now := time.Now()
+	p.flows.Range(func(key, value interface{}) bool {
+		flow := value.(*udpClientFlow)
+		last := time.Unix(0, flow.lastSeen.Load())
+		if now.Sub(last) < udpFlowKeepaliveIdle {
+			return true // 近期有实际流量：无需保活
+		}
+		if flow.keepalives.Load() >= udpFlowKeepaliveMax {
+			return true // 已达上限：停发，交由空闲回收
+		}
+		meta := udpFrameMeta{flowID: flow.flowID, flags: udpFrameFlagKeepalive, fragCnt: 1}
+		if !p.writeFrameV2(meta, nil) {
+			flow.remove()
+			return true
+		}
+		flow.keepalives.Add(1)
+		flow.lastSeen.Store(now.UnixNano())
+		return true
+	})
+}
+
+// runUDPProxy 启动 UDP 转发循环（服务端 → 本地服务方向 + flow 清理 + 保活），阻塞至 ctx 取消或全部 channel 断开。
+// 本地服务 → 服务端方向由每条 flow 的 pump goroutine 承担。
+func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core.Config) {
+	logger := base_core.GetLogger()
+
+	chans := sess.chs
+	if len(chans) == 0 {
+		logger.Error("UDP proxy: no data channel available")
+		return
+	}
+
+	localAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(config.LocalHost, fmt.Sprintf("%d", config.LocalPort)))
+	if err != nil {
+		logger.Error("UDP proxy: invalid local address %s:%d: %v", config.LocalHost, config.LocalPort, err)
+		for _, ch := range chans {
+			_ = ch.Close()
+		}
+		return
+	}
+
+	p := &udpProxy{
+		ch:             chans[0],
+		chs:            chans,
+		localAddr:      localAddr,
+		idleTimeout:    udpEffectiveFlowIdleTimeout(config.UDPFlowIdleTimeout),
+		socketBuffer:   config.UDPSocketBuffer,
+		maxPacketSize:  sess.maxPacketSize,
+		fragEnabled:    sess.fragEnabled,
+		fragPayloadMax: sess.fragPayloadMax,
+		shardCount:     sess.shardCount,
+	}
+	if p.fragEnabled {
+		p.reasm = newUDPReassembler()
+		p.bufPoolLarge = newReadBufPool(udpMaxDatagramSize + 1)
+	} else {
+		p.bufPool = newReadBufPool(p.effectiveMaxPacketSize() + 1)
+	}
+
+	logger.Info("[UDP] Data plane started (mode=channel, frag=%v, shards=%d, maxPacket=%d) - Remote listener: 0.0.0.0:%d, Local target: %s:%d",
+		sess.fragEnabled, len(chans), p.effectiveMaxPacketSize(), sess.actualPort, config.LocalHost, config.LocalPort)
+
+	// 每条数据面 channel 一个读循环（O5：N 条并行，缓解单 channel 队头阻塞）
+	var readers sync.WaitGroup
+	for _, ch := range chans {
+		readers.Add(1)
+		go func(ch ssh.Channel) {
+			defer readers.Done()
+			p.readChannel(ch)
+		}(ch)
+	}
+
+	// 清理 + 保活循环
+	go func() {
+		cleanup := time.NewTicker(udpFlowCleanupInterval)
+		defer cleanup.Stop()
+		keepalive := time.NewTicker(udpFlowKeepaliveInterval)
+		defer keepalive.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-cleanup.C:
+				p.sweepIdleFlows()
+				if p.reasm != nil {
+					p.reasm.sweep()
+				}
+			case <-keepalive.C:
+				p.sendKeepalives()
+			}
+		}
+	}()
+
+	// 阻塞：ctx 取消 或 全部 channel 断开（读循环退出）后统一回收
+	done := make(chan struct{})
+	go func() {
+		readers.Wait()
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+	case <-done:
+	}
+	p.closeChannels()
+	p.closeAll()
+	logger.Info("[UDP] Data plane stopped")
 }
