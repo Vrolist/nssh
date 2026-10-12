@@ -661,6 +661,9 @@ func (d *Daemon) handleRegisterTransport(params map[string]string) string {
 			if sshKey != "" {
 				process.SSHKeyPath = sshKey
 			}
+			if proto := params["proto"]; proto != "" {
+				process.Proto = base_core.NormalizeProto(proto)
+			}
 		} else {
 			isNewProcess = true
 			m[processKey] = &WorkerInfo{
@@ -675,6 +678,7 @@ func (d *Daemon) handleRegisterTransport(params map[string]string) string {
 				SSHKeyPath:       sshKey,
 				StartTime:        parseTime(startTimeStr, time.Now()),
 				Status:           status,
+				Proto:            base_core.NormalizeProto(params["proto"]),
 				LastRegisterTime: time.Now(),
 				StatusChangeTime: parseTime(statusChangeTimeStr, time.Now()),
 			}
@@ -855,10 +859,15 @@ func (d *Daemon) formatCommandResponse(process *WorkerInfo) string {
 			process.ServerPort, process.Password, process.SSHKeyPath)
 	}
 
+	if proto := base_core.NormalizeProto(process.Proto); proto == "udp" || proto == "both" {
+		cmd += " --proto " + proto
+	}
+
 	resp := Response{Success: true, Data: map[string]interface{}{
 		"username": process.Username,
 		"command":  cmd,
 		"id":       process.ID,
+		"proto":    base_core.NormalizeProto(process.Proto),
 	}}
 	b, _ := json.Marshal(resp)
 	return string(b) + "\n"
@@ -908,11 +917,16 @@ func (d *Daemon) formatAllCommandsResponse(username string, server string, serve
 				item.info.ServerPort, item.info.Password, item.info.SSHKeyPath)
 		}
 
+		if proto := base_core.NormalizeProto(item.info.Proto); proto == "udp" || proto == "both" {
+			cmd += " --proto " + proto
+		}
+
 		commands = append(commands, map[string]interface{}{
 			"username": item.info.Username,
 			"id":       item.info.ID,
 			"server":   fmt.Sprintf("%s:%d", item.info.ServerHost, item.info.ServerPort),
 			"command":  cmd,
+			"proto":    base_core.NormalizeProto(item.info.Proto),
 		})
 	}
 
@@ -1007,6 +1021,7 @@ func (d *Daemon) startWorker(config *base_core.Config) error {
 			SSHKeyPath:  config.SSHKeyPath,
 			StartTime:   time.Now(),
 			Status:      "offline",
+			Proto:       base_core.NormalizeProto(config.Proto),
 			MaxLifetime: config.MaxLifetime,
 			Config:      config,
 		}

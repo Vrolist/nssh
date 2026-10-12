@@ -37,6 +37,7 @@ type WorkerInfo struct {
 	SSHKeyPath      string              `json:"ssh_key_path"`
 	StartTime       time.Time           `json:"start_time"`
 	Status          string              `json:"status"`
+	Proto           string              `json:"proto"` // 转发协议：tcp / udp / both
 	LastRegisterTime time.Time          `json:"last_register_time"`
 	StatusChangeTime time.Time          `json:"status_change_time"`
 	StatsManager    *base_core.StatsManager `json:"-"`

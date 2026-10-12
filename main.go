@@ -842,6 +842,7 @@ func printProcessList(data interface{}) {
 
 	maxLocalPortWidth := 20
 	maxRemotePortWidth := 8
+	maxProtoWidth := 5
 	maxUserWidth := 10
 	maxRemoteServerWidth := 20
 	maxStatusWidth := 8
@@ -859,6 +860,7 @@ func printProcessList(data interface{}) {
 		localPort := int(processMap["local_port"].(float64))
 		remotePort := int(processMap["remote_port"].(float64))
 		status, _ := processMap["status"].(string)
+		proto := displayProto(processMap["proto"])
 
 		localPortStr := fmt.Sprintf("%s:%d", localHost, localPort)
 		remotePortStr := strconv.Itoa(remotePort)
@@ -872,6 +874,9 @@ func printProcessList(data interface{}) {
 		}
 		if len(remotePortStr) > maxRemotePortWidth {
 			maxRemotePortWidth = len(remotePortStr)
+		}
+		if len(proto) > maxProtoWidth {
+			maxProtoWidth = len(proto)
 		}
 		if len(username) > maxUserWidth {
 			maxUserWidth = len(username)
@@ -891,15 +896,16 @@ func printProcessList(data interface{}) {
 	}
 
 	fmt.Printf("Daemon Version: %s (PID: %d)\n\n", daemonVersion, daemonPID)
-	fmt.Printf("%-4s %-*s %-*s %-*s %-*s %-*s\n",
+	fmt.Printf("%-4s %-*s %-*s %-*s %-*s %-*s %-*s\n",
 		"#",
 		maxRemotePortWidth, "remote",
+		maxProtoWidth, "proto",
 		maxLocalPortWidth, "local-port",
 		maxUserWidth, "user",
 		maxRemoteServerWidth, "remote-server",
 		maxStatusWidth, "status")
 
-	totalWidth := 4 + maxRemotePortWidth + maxLocalPortWidth + maxUserWidth + maxRemoteServerWidth + maxStatusWidth
+	totalWidth := 4 + maxRemotePortWidth + maxProtoWidth + maxLocalPortWidth + maxUserWidth + maxRemoteServerWidth + maxStatusWidth
 	fmt.Println(strings.Repeat("-", totalWidth))
 
 	for i, p := range processes {
@@ -915,19 +921,28 @@ func printProcessList(data interface{}) {
 		localPort := int(processMap["local_port"].(float64))
 		remotePort := int(processMap["remote_port"].(float64))
 		status, _ := processMap["status"].(string)
+		proto := displayProto(processMap["proto"])
 
 		localPortStr := fmt.Sprintf("%s:%d", localHost, localPort)
 		remotePortStr := strconv.Itoa(remotePort)
 		remoteServerStr := fmt.Sprintf("%s:%d", serverHost, serverPort)
 
-		fmt.Printf("%-4d %-*s %-*s %-*s %-*s %-*s\n",
+		fmt.Printf("%-4d %-*s %-*s %-*s %-*s %-*s %-*s\n",
 			i+1,
 			maxRemotePortWidth, remotePortStr,
+			maxProtoWidth, proto,
 			maxLocalPortWidth, localPortStr,
 			maxUserWidth, username,
 			maxRemoteServerWidth, remoteServerStr,
 			maxStatusWidth, status)
 	}
+}
+
+// displayProto 归一化列表里的 proto 字段用于展示：空/未知一律回退 tcp，
+// 与 daemon 侧 base_core.NormalizeProto 同口径。
+func displayProto(v interface{}) string {
+	s, _ := v.(string)
+	return base_core.NormalizeProto(s)
 }
 
 func printLogInfo(data interface{}) {
@@ -1041,6 +1056,7 @@ func printCommandInfo(data interface{}) {
 
 	fmt.Printf("Username: %s\n", usr)
 	fmt.Printf("ID: %s\n", id)
+	fmt.Printf("Proto: %s\n", displayProto(dataMap["proto"]))
 	fmt.Printf("Command: %s\n", cmd)
 }
 
@@ -1061,6 +1077,7 @@ func printAllCommandsInfo(commands []interface{}) {
 		fmt.Printf("%d. Username: %s\n", i+1, username)
 		fmt.Printf("   ID: %s\n", id)
 		fmt.Printf("   Server: %s\n", server)
+		fmt.Printf("   Proto: %s\n", displayProto(cmdMap["proto"]))
 		fmt.Printf("   Command: %s\n", command)
 		fmt.Println()
 	}
