@@ -102,7 +102,7 @@ func setupTCPForward(client *ssh.Client, channelHandler *ChannelHandler, connCtx
 						offset := 4 + addrLen + 4
 
 						if len(extraData) >= offset+4 {
-							originAddrLen := int(binary.BigEndian.Uint32(extraData[offset:offset+4]))
+							originAddrLen := int(binary.BigEndian.Uint32(extraData[offset : offset+4]))
 							offset += 4
 
 							if len(extraData) >= offset+originAddrLen+4 {
@@ -200,7 +200,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		transportConn.Close()
 		return fmt.Errorf("failed to create SSH client: %w", err)
 	}
-	
+
 	// 【worker】ssh.Client 内存占用分析:
 	// - ssh.Client结构: 约1-5KB (包含连接状态、channel管理等)
 	// - chans channel: 缓冲区约1KB
@@ -219,12 +219,12 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 	// 4. SSH库可能有自己的内存池
 	// 5. 长时间运行的连接可能导致缓冲区增长
 	// 6. 大量数据传输会占用更多内存
-	// 
+	//
 	// 内存占用估算:
 	// - 假设20个并发连接: 20个channel × 5KB = 100KB
 	// - 加上SSH Client基础: 3-7KB
 	// - 总计: 103-107KB
-	// 
+	//
 	// 优化建议:
 	// - 限制并发channel数量
 	// - 添加channel超时清理机制
@@ -256,18 +256,27 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 
 	channelHandler := &ChannelHandler{
 		localHost:    config.LocalHost,
-		localPort:   config.LocalPort,
+		localPort:    config.LocalPort,
 		statsManager: statsManager,
 	}
 
+	// UDP DATAGRAM（阶段5）：仅 QUIC 传输且两端协商支持 DATAGRAM 时启用。
+	// 任一条不满足（TCP / 对端未启用 / 握手未协商成功）→ nil，UDP 数据面回落 channel 基线。
+	var udpDatagram datagramConn
+	if transportMode == "quic" {
+		if dc, ok := transportConn.(datagramConn); ok && dc.SupportsDatagrams() {
+			udpDatagram = dc
+		}
+	}
+
 	// 转发协议分支（阶段4 扩展 --proto both）：
-	// - udp：仅 UDP 业务穿透（channel 基线）
+	// - udp：仅 UDP 业务穿透（QUIC datagram 优先，否则 channel 基线）
 	// - both：单连接双栈——先 TCP 声明（现状路径原样），再 UDP 声明+数据面；
 	//   同 remote_port TCP/UDP 不冲突可共存，一条 worker 承载整条隧道（daemon 键规则不变）
 	// - tcp（默认）：现状路径，一行不动
 	switch config.Proto {
 	case "udp":
-		udpSess, err := setupUDPForward(client, config)
+		udpSess, err := setupUDPForward(client, config, udpDatagram)
 		if err != nil {
 			client.Close()
 			transportConn.Close()
@@ -279,7 +288,7 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		// TCP 声明：沿用现状路径（声明失败会关闭连接触发上层重连）
 		setupTCPForward(client, channelHandler, connCtx, config)
 		// UDP 声明：失败视为整条隧道失败，返回错误触发重连循环
-		udpSess, err := setupUDPForward(client, config)
+		udpSess, err := setupUDPForward(client, config, udpDatagram)
 		if err != nil {
 			client.Close()
 			transportConn.Close()

@@ -45,6 +45,9 @@ const (
 	udpCapsFrag byte = 0x02
 	// udpCapsShard 客户端能力位 bit3：支持多 channel 分片（O5，与节点侧 bit3 对齐）
 	udpCapsShard byte = 0x08
+	// udpCapsDatagram 客户端能力位 bit2：支持 QUIC datagram 数据面（阶段5，与节点侧 bit2 对齐）。
+	// 仅在 QUIC 传输且两端 SupportsDatagrams 协商成功时置位；否则回落 channel 基线。
+	udpCapsDatagram byte = 0x04
 
 	// udpMaxPacketSize 未协商分片时的单报文上限兜底（v1 口径；配置 NSSH_UDP_MAX_PACKET_SIZE 覆盖，
 	// 服务端 reply 协商值优先）。OpenVPN 建议配 tun-mtu 1200。
@@ -260,17 +263,21 @@ func udpShardIndex(flowID uint32, n int) int {
 
 // udpForwardSession UDP 转发控制面协商结果（数据面 channel + 分片/多通道能力）
 type udpForwardSession struct {
-	chs            []ssh.Channel // 数据面 channel：N 条（O5），N=1 时为单通道基线
+	chs            []ssh.Channel // 数据面 channel：N 条（O5），N=1 时为单通道基线；datagram 模式为空
 	actualPort     uint32
 	shardCount     int  // 数据面 channel 条数（O5）；1 = 未启用多通道
 	maxPacketSize  int  // v1 整包上限（服务端协商值优先，O6 口径对齐）
 	fragEnabled    bool // 双端协商启用 v2 分片帧
 	fragPayloadMax int  // 单帧 payload 上限（v2）
+	// datagram 非 nil 表示数据面走 QUIC DATAGRAM（阶段5）：复用 v2 帧与分片，不建 channel。
+	datagram datagramConn
 }
 
 // setupUDPForward 控制面：声明 UDP 转发端口并打开数据面 channel（N 条）。
-// 返回协商结果（channels + 服务端实际端口 + 分片/多通道能力）。
-func setupUDPForward(client *ssh.Client, config *base_core.Config) (*udpForwardSession, error) {
+// dc 非 nil 表示 QUIC 传输且两端已协商支持 DATAGRAM（阶段5）：request 置 bit2 声明能力，
+// 服务端 reply 回带 bit2 且分片可用时，数据面改走 QUIC DATAGRAM（不建 channel）。
+// 返回协商结果（channels/datagram + 服务端实际端口 + 分片/多通道能力）。
+func setupUDPForward(client *ssh.Client, config *base_core.Config, dc datagramConn) (*udpForwardSession, error) {
 	// request payload 与 tcpip-forward 同构（addrLen+addr+port），尾部追加 1 字节能力位
 	const bindAddr = "0.0.0.0"
 	payload := make([]byte, 0, 4+len(bindAddr)+4+1)
@@ -278,7 +285,12 @@ func setupUDPForward(client *ssh.Client, config *base_core.Config) (*udpForwardS
 	payload = append(payload, bindAddr...)
 	payload = binary.BigEndian.AppendUint32(payload, uint32(config.RemotePort))
 	// bit0 恒 1；bit1 声明支持分片；bit3 声明支持多通道（O5，老服务端忽略未知位）
-	payload = append(payload, udpCapsChannel|udpCapsFrag|udpCapsShard)
+	caps := udpCapsChannel | udpCapsFrag | udpCapsShard
+	// bit2：仅 QUIC 传输且两端 SupportsDatagrams 时声明 DATAGRAM 数据面能力
+	if dc != nil && dc.SupportsDatagrams() {
+		caps |= udpCapsDatagram
+	}
+	payload = append(payload, caps)
 
 	ok, resp, err := client.SendRequest(udpForwardRequest, true, payload)
 	if err != nil {
@@ -326,6 +338,18 @@ func setupUDPForward(client *ssh.Client, config *base_core.Config) (*udpForwardS
 			sc = udpMaxShardCount
 		}
 		sess.shardCount = sc
+	}
+
+	// 阶段5 DATAGRAM 协商：双端均置 bit2 且分片可用时启用；否则回落 channel 基线。
+	// 依赖 fragEnabled：datagram 复用 v2 帧与分片（>PMTU 的报文需切分），未协商分片则不启用。
+	if dc != nil && sess.fragEnabled && len(resp) >= 6 && resp[5]&udpCapsDatagram != 0 {
+		sess.datagram = dc
+		// datagram 内容受 QUIC 单帧上限约束：有效分片上限取两者较小值
+		if sess.fragPayloadMax > udpDatagramFramePayloadMax {
+			sess.fragPayloadMax = udpDatagramFramePayloadMax
+		}
+		// datagram 模式不建 channel：数据面走 QUIC DATAGRAM 直发
+		return sess, nil
 	}
 
 	// 打开 N 条数据面 channel：ExtraData = actualPort(4B) + shardIndex(1B)。
@@ -388,6 +412,11 @@ type udpProxy struct {
 	chs         []ssh.Channel // O5：数据面 channel 列表（N 条）；channelFor 由此按 flow 选片
 	localAddr   *net.UDPAddr
 	idleTimeout time.Duration
+
+	// 阶段5：datagram 非 nil 表示数据面走 QUIC DATAGRAM（不建 channel）；
+	// port = 服务端实际监听端口，作为 datagram 载荷 2B 端口头，供节点侧路由到对应转发器。
+	datagram datagramConn
+	port     int
 
 	// socketBuffer UDP flow socket 内核收发缓冲（字节）：>0 时按配置设置，<=0 走内核默认（O1）
 	socketBuffer int
@@ -477,8 +506,11 @@ func (p *udpProxy) writeFrame(flowID uint32, payload []byte) bool {
 	return true
 }
 
-// writeFrameV2 v2 帧 → flow 对应 channel 写入
+// writeFrameV2 v2 帧 → flow 对应 channel 写入；datagram 模式下改走 QUIC DATAGRAM。
 func (p *udpProxy) writeFrameV2(meta udpFrameMeta, payload []byte) bool {
+	if p.datagram != nil {
+		return p.sendDatagramFrame(meta, payload)
+	}
 	if _, err := p.channelFor(meta.flowID).Write(encodeUDPFrameV2(meta, payload)); err != nil {
 		return false
 	}
@@ -687,12 +719,13 @@ func (p *udpProxy) sendKeepalives() {
 }
 
 // runUDPProxy 启动 UDP 转发循环（服务端 → 本地服务方向 + flow 清理 + 保活），阻塞至 ctx 取消或全部 channel 断开。
+// datagram 模式无数据面 channel：服务端 → 本地服务方向由 readDatagrams 承担，阻塞仅等 ctx 取消。
 // 本地服务 → 服务端方向由每条 flow 的 pump goroutine 承担。
 func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core.Config) {
 	logger := base_core.GetLogger()
 
 	chans := sess.chs
-	if len(chans) == 0 {
+	if sess.datagram == nil && len(chans) == 0 {
 		logger.Error("UDP proxy: no data channel available")
 		return
 	}
@@ -707,8 +740,6 @@ func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core
 	}
 
 	p := &udpProxy{
-		ch:             chans[0],
-		chs:            chans,
 		localAddr:      localAddr,
 		idleTimeout:    udpEffectiveFlowIdleTimeout(config.UDPFlowIdleTimeout),
 		socketBuffer:   config.UDPSocketBuffer,
@@ -716,6 +747,12 @@ func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core
 		fragEnabled:    sess.fragEnabled,
 		fragPayloadMax: sess.fragPayloadMax,
 		shardCount:     sess.shardCount,
+		datagram:       sess.datagram,
+		port:           int(sess.actualPort),
+	}
+	if len(chans) > 0 {
+		p.ch = chans[0]
+		p.chs = chans
 	}
 	if p.fragEnabled {
 		p.reasm = newUDPReassembler()
@@ -724,17 +761,31 @@ func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core
 		p.bufPool = newReadBufPool(p.effectiveMaxPacketSize() + 1)
 	}
 
-	logger.Info("[UDP] Data plane started (mode=channel, frag=%v, shards=%d, maxPacket=%d) - Remote listener: 0.0.0.0:%d, Local target: %s:%d",
-		sess.fragEnabled, len(chans), p.effectiveMaxPacketSize(), sess.actualPort, config.LocalHost, config.LocalPort)
+	if p.datagram != nil {
+		logger.Info("[UDP] Data plane started (mode=datagram, frag=%v, maxDatagramFrame=%d) - Remote listener: 0.0.0.0:%d, Local target: %s:%d",
+			sess.fragEnabled, p.fragPayloadMax, sess.actualPort, config.LocalHost, config.LocalPort)
+	} else {
+		logger.Info("[UDP] Data plane started (mode=channel, frag=%v, shards=%d, maxPacket=%d) - Remote listener: 0.0.0.0:%d, Local target: %s:%d",
+			sess.fragEnabled, len(chans), p.effectiveMaxPacketSize(), sess.actualPort, config.LocalHost, config.LocalPort)
+	}
 
-	// 每条数据面 channel 一个读循环（O5：N 条并行，缓解单 channel 队头阻塞）
-	var readers sync.WaitGroup
-	for _, ch := range chans {
-		readers.Add(1)
-		go func(ch ssh.Channel) {
-			defer readers.Done()
-			p.readChannel(ch)
-		}(ch)
+	// 数据面读循环：datagram 模式走 QUIC DATAGRAM；channel 模式每条 channel 一个读循环（O5）。
+	done := make(chan struct{})
+	if p.datagram != nil {
+		go p.readDatagrams(ctx)
+	} else {
+		var readers sync.WaitGroup
+		for _, ch := range chans {
+			readers.Add(1)
+			go func(ch ssh.Channel) {
+				defer readers.Done()
+				p.readChannel(ch)
+			}(ch)
+		}
+		go func() {
+			readers.Wait()
+			close(done)
+		}()
 	}
 
 	// 清理 + 保活循环
@@ -758,12 +809,7 @@ func runUDPProxy(ctx context.Context, sess *udpForwardSession, config *base_core
 		}
 	}()
 
-	// 阻塞：ctx 取消 或 全部 channel 断开（读循环退出）后统一回收
-	done := make(chan struct{})
-	go func() {
-		readers.Wait()
-		close(done)
-	}()
+	// 阻塞：ctx 取消 或 全部 channel 断开（读循环退出）后统一回收；datagram 模式仅等 ctx。
 	select {
 	case <-ctx.Done():
 	case <-done:

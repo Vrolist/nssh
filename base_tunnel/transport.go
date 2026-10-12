@@ -63,6 +63,29 @@ func (c *quicStreamConn) Close() error {
 	return nil
 }
 
+// datagramConn 抽象 QUIC 不可靠数据报（RFC9221）能力。
+// 仅 QUIC 传输实现该接口；TCP 传输不实现 → 类型断言失败即回落 channel 基线。
+type datagramConn interface {
+	SendDatagram(payload []byte) error
+	ReceiveDatagram(ctx context.Context) ([]byte, error)
+	SupportsDatagrams() bool
+}
+
+// SendDatagram 透传 QUIC DATAGRAM（不可靠、无重传，贴合 UDP 语义）
+func (c *quicStreamConn) SendDatagram(payload []byte) error {
+	return c.conn.SendDatagram(payload)
+}
+
+// ReceiveDatagram 接收一条 QUIC DATAGRAM
+func (c *quicStreamConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	return c.conn.ReceiveDatagram(ctx)
+}
+
+// SupportsDatagrams 对端是否协商支持 DATAGRAM（RFC9221）
+func (c *quicStreamConn) SupportsDatagrams() bool {
+	return c.conn.ConnectionState().SupportsDatagrams
+}
+
 // transportCache auto 模式的粘性探测结果缓存：serverAddr → {mode, retryQUICAt}
 type transportCacheEntry struct {
 	mode        string // "quic" | "tcp"
@@ -114,6 +137,10 @@ func dialQUICTransport(ctx context.Context, serverAddr string, timeout time.Dura
 	qconn, err := quic.DialAddr(dialCtx, serverAddr, quicClientTLS(), &quic.Config{
 		MaxIdleTimeout:  300 * time.Second,
 		KeepAlivePeriod: QUICKeepAlivePeriod,
+		// EnableDatagrams（RFC9221）：QUIC 传输默认启用不可靠数据报，供 UDP 业务穿透走
+		// DATAGRAM 直发（免 SSH channel 可靠有序化）。对端不支持时 SupportsDatagrams 为 false，
+		// udp-forward 不置能力位，自动回落 channel 基线（TCP 传输与本开关无关）。
+		EnableDatagrams: true,
 	})
 	if err != nil {
 		return nil, err
