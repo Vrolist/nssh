@@ -132,4 +132,3 @@ Salsa CI 全绿 → ITP bug 申报 → 提交 sponsor（mentors.debian.net）→
 - **企业定制版**: `/Users/buladou/workspace/nssh-enterprise` — 通过 git subtree 引入本仓库代码，叠加企业定制（AppFlavor、设备 ID 认证、iKuai 构建矩阵）
 - **旧项目**: `/Users/buladou/workspace/nssh_client_go`（已废弃，逐步下架）
 - **服务端**: `/Users/buladou/workspace/nwy_node_core_server_go` — 反向隧道服务端
-- **管理端**: `/Users/buladou/workspace/nssh_client_manager` — Web 管理界面
