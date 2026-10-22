@@ -37,6 +37,7 @@ type Config struct {
 	MaxLifetime        int    // MaxLifetime in seconds; 0 means no lifetime restart
 	Transport          string // 传输模式: auto（默认，QUIC 探测成功用 QUIC，否则 TCP）/ quic / tcp
 	Proto              string // 反向转发协议: both（默认，同端口 TCP+UDP 双栈）/ tcp / udp
+	Compress           bool   // 是否启用隧道应用层压缩（响应方向 client->server，默认开）
 	UDPSocketBuffer    int    // UDP flow socket 内核收发缓冲（字节）；默认 256KB，<0 = 走内核默认
 	UDPMaxPacketSize   int    // UDP 单报文上限（字节，v1 回落口径）；默认 1400，服务端协商值优先（O6 口径对齐）
 	UDPFlowIdleTimeout int    // UDP flow 空闲回收（秒）；默认 330
@@ -72,6 +73,7 @@ func LoadConfig(reverseTunnel string, port int, password string, sshKey string, 
 		MaxLifetime:        getEnvInt("MAX_LIFETIME", 172800),
 		Transport:          getEnv("NSSH_TRANSPORT", "auto"),
 		Proto:              NormalizeProto(getEnv("NSSH_PROTO", "both")),
+		Compress:           getEnvBool("NSSH_COMPRESS", true),
 		UDPSocketBuffer:    getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
 		UDPMaxPacketSize:   getEnvInt("NSSH_UDP_MAX_PACKET_SIZE", udpDefaultMaxPacketSize),
 		UDPFlowIdleTimeout: getEnvInt("NSSH_UDP_FLOW_IDLE_TIMEOUT", udpDefaultFlowIdleTimeout),
@@ -146,6 +148,19 @@ func getEnvInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
+// getEnvBool 解析布尔环境变量：1/true/yes/on 为真，0/false/no/off 为假，
+// 其他值/未设置时回退默认值。
+func getEnvBool(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return defaultValue
+}
+
 func LoadConfigFromEnv() *Config {
 	return &Config{
 		ServerHost:         getEnv("NSSH_SERVER_HOST", ""),
@@ -161,6 +176,7 @@ func LoadConfigFromEnv() *Config {
 		MaxLifetime:        getEnvInt("MAX_LIFETIME", 172800),
 		Transport:          getEnv("NSSH_TRANSPORT", "auto"),
 		Proto:              NormalizeProto(getEnv("NSSH_PROTO", "both")),
+		Compress:           getEnvBool("NSSH_COMPRESS", true),
 		UDPSocketBuffer:    getEnvInt("NSSH_UDP_SOCKET_BUFFER", udpDefaultSocketBuffer),
 		UDPMaxPacketSize:   getEnvInt("NSSH_UDP_MAX_PACKET_SIZE", udpDefaultMaxPacketSize),
 		UDPFlowIdleTimeout: getEnvInt("NSSH_UDP_FLOW_IDLE_TIMEOUT", udpDefaultFlowIdleTimeout),

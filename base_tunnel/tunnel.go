@@ -32,6 +32,7 @@ type ChannelHandler struct {
 	localHost    string
 	localPort    int
 	statsManager *base_core.StatsManager
+	compress     bool // 是否已与服务端协商启用应用层压缩（client->server）
 }
 
 // 【worker】ChannelHandler 结构体内存占用分析：
@@ -258,6 +259,24 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		localHost:    config.LocalHost,
 		localPort:    config.LocalPort,
 		statsManager: statsManager,
+	}
+
+	// 应用层压缩协商（C 方案，响应方向 client→server）：
+	// 老服务端不认识该请求会回复 false，协商失败保持原始字节，行为零变化。
+	if config.Compress {
+		enabled, ok := negotiateCompress(client, 5*time.Second)
+		if !ok {
+			// 无法确定对端是否已启用压缩：断开重连，避免两端帧格式不一致
+			client.Close()
+			statsManager.RecordFailure()
+			return fmt.Errorf("tunnel compression negotiation timeout")
+		}
+		channelHandler.compress = enabled
+		if channelHandler.compress {
+			logger.Info("Tunnel compression negotiated (client->server)")
+		} else {
+			logger.Debug("Tunnel compression not available, using raw transport")
+		}
 	}
 
 	// UDP DATAGRAM（阶段5）：仅 QUIC 传输且两端协商支持 DATAGRAM 时启用。

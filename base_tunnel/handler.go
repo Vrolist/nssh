@@ -53,7 +53,13 @@ func (h *ChannelHandler) handleChannel(ctx context.Context, ch ssh.Channel, loca
 
 	go func() {
 		defer wg.Done()
-		n, err := io.CopyBuffer(ch, localConn, buf2)
+		// 响应方向（local→SSH）：协商成功后按块压缩写入隧道；
+		// 未协商时直接写原始 channel，行为与现状完全一致。
+		var sshWriter io.Writer = ch
+		if h.compress {
+			sshWriter = newCompressWriter(ch)
+		}
+		n, err := io.CopyBuffer(sshWriter, localConn, buf2)
 		if err != nil {
 			logger.Debug("[HANDLER] local->SSH error: %v", err)
 		}

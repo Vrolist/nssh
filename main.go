@@ -89,15 +89,20 @@ func main() {
 	// 传输模式（SSH over QUIC 阶段1）：auto=默认，QUIC 探测成功用 QUIC，失败回退 TCP；quic=强制 QUIC；tcp=现状路径
 	transportMode := pflag.String("transport", "auto", "Transport mode: auto (probe QUIC, fallback TCP), quic, tcp")
 	protoMode := pflag.String("proto", "both", "Reverse tunnel protocol: both (default, same port dual-stack), tcp, udp")
+	// 隧道应用层压缩（响应方向 client->server，默认开；对端不支持时自动回退原始字节）
+	compressEnabled := pflag.Bool("compress", true, "Enable tunnel payload compression (client->server, default on)")
 
 	pflag.Parse()
 
-	// NSSH_TRANSPORT / NSSH_PROTO 环境变量透传给 daemon/worker 进程（worker 继承环境读取同名字段）
+	// NSSH_TRANSPORT / NSSH_PROTO / NSSH_COMPRESS 环境变量透传给 daemon/worker 进程（worker 继承环境读取同名字段）
 	if os.Getenv("NSSH_TRANSPORT") == "" {
 		os.Setenv("NSSH_TRANSPORT", *transportMode)
 	}
 	if os.Getenv("NSSH_PROTO") == "" {
 		os.Setenv("NSSH_PROTO", *protoMode)
+	}
+	if os.Getenv("NSSH_COMPRESS") == "" {
+		os.Setenv("NSSH_COMPRESS", strconv.FormatBool(*compressEnabled))
 	}
 
 	if *daemonInnerMode {
