@@ -42,6 +42,9 @@ type Config struct {
 	UDPMaxPacketSize   int    // UDP 单报文上限（字节，v1 回落口径）；默认 1400，服务端协商值优先（O6 口径对齐）
 	UDPFlowIdleTimeout int    // UDP flow 空闲回收（秒）；默认 330
 	Version            string
+	// OnTunnelEstablished 隧道转发声明（tcpip-forward / udp-forward）全部成功后的回调。
+	// daemon 用它把 worker 真正置为 online；不得序列化，nil 表示不关心。
+	OnTunnelEstablished func()
 }
 
 // 【daemon; worker】Config 结构体内存占用分析：

@@ -42,9 +42,19 @@ type ChannelHandler struct {
 // 总计: 约 30-50 bytes/实例 (不含共享的StatsManager)
 // 生命周期: 每次SSH连接时创建，连接断开后释放
 
-// setupTCPForward TCP 反向转发（现状路径原样迁移）：注册 forwarded-tcpip channel 接收 +
-// 发送 tcpip-forward 端口声明 + 转发循环（每个新 channel 独立 goroutine 处理，消除队头阻塞）
-func setupTCPForward(client *ssh.Client, channelHandler *ChannelHandler, connCtx context.Context, config *base_core.Config) {
+// tcpForwardClient setupTCPForward 所需的最小 SSH 客户端能力集合。
+// 抽成接口便于单测：真实实现为 *ssh.Client，测试用假实现验证服务端拒绝
+// tcpip-forward（ok=false）时必须断线，而不是把连接当成已建立。
+type tcpForwardClient interface {
+	HandleChannelOpen(channelType string) <-chan ssh.NewChannel
+	SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error)
+	Close() error
+}
+
+// declareTCPForward 注册 forwarded-tcpip channel 接收并发送 tcpip-forward 端口声明。
+// 服务端明确拒绝（ok=false，例如关闭了 AllowRemoteForward/端口策略不允许）时，
+// 连接虽然存活但没有任何转发能力——必须断线重连，否则客户端会长期"假在线"。
+func declareTCPForward(client tcpForwardClient, remotePort int) (<-chan ssh.NewChannel, error) {
 	logger := base_core.GetLogger()
 
 	requests := client.HandleChannelOpen("forwarded-tcpip")
@@ -52,22 +62,39 @@ func setupTCPForward(client *ssh.Client, channelHandler *ChannelHandler, connCtx
 		// 注册失败属罕见路径：记录错误并断开连接（等待上层重连）
 		logger.Error("Failed to register for forwarded-tcpip channel requests")
 		client.Close()
-		return
+		return nil, fmt.Errorf("failed to register for forwarded-tcpip channel requests")
 	}
 
-	_, _, err := client.SendRequest("tcpip-forward", true, ssh.Marshal(&struct {
+	ok, _, err := client.SendRequest("tcpip-forward", true, ssh.Marshal(&struct {
 		Address string
 		Port    uint32
 	}{
 		Address: "0.0.0.0",
-		Port:    uint32(config.RemotePort),
+		Port:    uint32(remotePort),
 	}))
 	if err != nil {
 		logger.Error("Failed to send tcpip-forward request: %v", err)
 		client.Close()
-		return
+		return nil, fmt.Errorf("failed to send tcpip-forward request: %w", err)
+	}
+	if !ok {
+		logger.Error("Server rejected tcpip-forward request for remote port %d", remotePort)
+		client.Close()
+		return nil, fmt.Errorf("server rejected tcpip-forward request for remote port %d", remotePort)
+	}
+	return requests, nil
+}
+
+// setupTCPForward TCP 反向转发：注册 channel + 端口声明 + 转发循环
+// （每个新 channel 独立 goroutine 处理，消除队头阻塞）。
+// 返回错误表示隧道未建立成功，调用方必须关闭连接并进入重连流程。
+func setupTCPForward(client tcpForwardClient, channelHandler *ChannelHandler, connCtx context.Context, config *base_core.Config) error {
+	requests, err := declareTCPForward(client, config.RemotePort)
+	if err != nil {
+		return err
 	}
 
+	logger := base_core.GetLogger()
 	logger.Info("Tunnel established successfully! Remote listener: 0.0.0.0:%d, Local target: %s:%d", config.RemotePort, config.LocalHost, config.LocalPort)
 
 	go func() {
@@ -129,6 +156,7 @@ func setupTCPForward(client *ssh.Client, channelHandler *ChannelHandler, connCtx
 			}
 		}
 	}()
+	return nil
 }
 
 // sendKeepaliveWithTimeout 发送 keepalive 并带超时保护。
@@ -304,8 +332,13 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		}
 		go runUDPProxy(connCtx, udpSess, config)
 	case "both":
-		// TCP 声明：沿用现状路径（声明失败会关闭连接触发上层重连）
-		setupTCPForward(client, channelHandler, connCtx, config)
+		// TCP 声明：被服务端拒绝（ok=false）或发送失败 → 整条隧道失败，断开重连
+		if err := setupTCPForward(client, channelHandler, connCtx, config); err != nil {
+			client.Close()
+			transportConn.Close()
+			statsManager.RecordFailure()
+			return fmt.Errorf("failed to setup TCP forward (dual-stack): %w", err)
+		}
 		// UDP 声明：失败视为整条隧道失败，返回错误触发重连循环
 		udpSess, err := setupUDPForward(client, config, udpDatagram)
 		if err != nil {
@@ -317,8 +350,20 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		go runUDPProxy(connCtx, udpSess, config)
 		logger.Info("Dual-stack tunnel established! Remote listener: 0.0.0.0:%d (tcp+udp), Local target: %s:%d", config.RemotePort, config.LocalHost, config.LocalPort)
 	default:
-		setupTCPForward(client, channelHandler, connCtx, config)
+		if err := setupTCPForward(client, channelHandler, connCtx, config); err != nil {
+			client.Close()
+			transportConn.Close()
+			statsManager.RecordFailure()
+			return fmt.Errorf("failed to setup TCP forward: %w", err)
+		}
 	}
+
+	// 转发声明全部成功 = 隧道真正建立。daemon 据此把 worker 置为 online；
+	// 禁止在连接/心跳阶段提前置 online，否则服务端拒绝转发或半开时会"假在线"。
+	if config.OnTunnelEstablished != nil {
+		config.OnTunnelEstablished()
+	}
+
 
 	heartbeatTicker := time.NewTicker(60 * time.Second)
 	defer heartbeatTicker.Stop()

@@ -1049,6 +1049,10 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 	worker.StatusChangeTime = time.Now()
 	worker.LastRegisterTime = time.Now()
 
+	// 只有隧道转发声明真正成功后才置 online（回调由 base_tunnel 在
+	// tcpip-forward/udp-forward 均被服务端接受后触发）。
+	config.OnTunnelEstablished = func() { markWorkerEstablished(worker) }
+
 	statsManager := base_core.NewStatsManager(config, true)
 	worker.StatsManager = statsManager
 	defer statsManager.Stop()
@@ -1064,8 +1068,7 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 				case <-heartbeatCtx.Done():
 					return
 				case <-ticker.C:
-					worker.LastRegisterTime = time.Now()
-					worker.Status = "online"
+					workerHeartbeatTick(worker)
 				}
 			}
 		}()
@@ -1100,6 +1103,20 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 			d.logger.Info("Worker %s reconnecting...", worker.Username)
 		}
 	}
+}
+
+// markWorkerEstablished 隧道转发声明成功后把 worker 置为 online。
+// 只能由 base_tunnel 的 OnTunnelEstablished 回调调用；禁止在心跳 ticker 中无条件置 online，
+// 否则服务端拒绝 tcpip-forward 或 SSH 半开时客户端会长期"假在线"。
+func markWorkerEstablished(worker *WorkerInfo) {
+	worker.Status = "online"
+	worker.StatusChangeTime = time.Now()
+}
+
+// workerHeartbeatTick 仅续期 worker 存活时间戳（主循环据此判断失联），
+// 不改变 Status——online 必须由隧道真正建立成功来证明。
+func workerHeartbeatTick(worker *WorkerInfo) {
+	worker.LastRegisterTime = time.Now()
 }
 
 func (d *Daemon) reportMonitorData() {
