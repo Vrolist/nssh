@@ -307,6 +307,21 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		}
 	}
 
+	// 数据面（L4-b）：QUIC 传输且未显式关闭时，在 SSH 连接上建立 nwy-data-plane
+	// 控制通道。老服务端不认识该 channel type 会直接拒绝 → 保留阶段1（单 stream 复用）。
+	if transportMode == "quic" && dataPlaneEnabled() {
+		if qc, ok := transportConn.(*quicStreamConn); ok {
+			if ch, reqs, err := client.OpenChannel(DataPlaneChannelType, nil); err == nil {
+				go ssh.DiscardRequests(reqs)
+				dp := newTunnelDataPlane(ch, qc.conn, channelHandler)
+				go dp.run(connCtx)
+				logger.Info("QUIC data plane established (per-connection streams)")
+			} else {
+				logger.Debug("QUIC data plane unavailable (%v), using single-stream transport", err)
+			}
+		}
+	}
+
 	// UDP DATAGRAM（阶段5）：仅 QUIC 传输且两端协商支持 DATAGRAM 时启用。
 	// 任一条不满足（TCP / 对端未启用 / 握手未协商成功）→ nil，UDP 数据面回落 channel 基线。
 	var udpDatagram datagramConn

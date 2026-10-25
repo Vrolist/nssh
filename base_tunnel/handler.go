@@ -7,14 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/Vrolist/nssh/base_core"
 )
 
 const copyBufferSize = 128 * 1024
 
-func (h *ChannelHandler) handleChannel(ctx context.Context, ch ssh.Channel, localConn net.Conn) {
+func (h *ChannelHandler) handleChannel(ctx context.Context, ch dataStreamConn, localConn net.Conn) {
 	logger := base_core.GetLogger()
 	defer localConn.Close()
 	defer ch.Close()
