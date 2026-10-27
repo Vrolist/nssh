@@ -337,6 +337,11 @@ func (d *Daemon) processLoop() {
 	}
 }
 
+// noProgressRestartTimeout 连接状态非 online 且超过该时长没有任何建连进展，
+// 说明重连线程卡死在无超时调用里（心跳 ticker 仍在续期 LastRegisterTime，
+// 失联分支永远不会触发）→ 强制重建 worker。
+const noProgressRestartTimeout = 2 * time.Minute
+
 func (d *Daemon) Run() {
 	sigChan := setupSignals()
 
@@ -373,6 +378,20 @@ func (d *Daemon) Run() {
 							p.ReconnectNeeded = false
 							go d.startWorker(p.Config)
 							continue
+						}
+
+						// 无进展兜底：worker 心跳 ticker 与连接状态解耦（LastRegisterTime
+						// 恒新鲜），重连线程一旦卡死就既不会报错也不会被判失联。这里用
+						// LastConnectTime（每次建连尝试/建连成功才前进）识别「卡死」。
+						if p.Status != "online" && p.Config != nil {
+							if p.LastConnectTime.IsZero() {
+								p.LastConnectTime = time.Now()
+							} else if gap := time.Since(p.LastConnectTime); gap > noProgressRestartTimeout {
+								d.logger.Warn("Worker %s no connect progress for %v, force restarting...", p.Username, gap)
+								p.LastConnectTime = time.Now()
+								go d.startWorker(p.Config)
+								continue
+							}
 						}
 
 						if p.LastRegisterTime.IsZero() {
@@ -1048,6 +1067,7 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 	worker.Status = "offline"
 	worker.StatusChangeTime = time.Now()
 	worker.LastRegisterTime = time.Now()
+	worker.LastConnectTime = time.Now()
 
 	// 只有隧道转发声明真正成功后才置 online（回调由 base_tunnel 在
 	// tcpip-forward/udp-forward 均被服务端接受后触发）。
@@ -1075,6 +1095,10 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 
 		err := base_tunnel.ConnectAndTunnel(ctx, config, statsManager)
 		heartbeatCancel()
+
+		// 每轮建连尝试都算一次「进展」：用于 supervisor 识别「卡死在无超时调用里」
+		// 与「正常但连不上、仍在循环重试」两种情况（后者不应被强制重建）。
+		worker.LastConnectTime = time.Now()
 
 		select {
 		case <-ctx.Done():

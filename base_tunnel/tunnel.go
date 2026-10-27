@@ -51,6 +51,35 @@ type tcpForwardClient interface {
 	Close() error
 }
 
+const (
+	// forwardRequestTimeout tcpip-forward 请求超时：服务端不回复时（半开/卡死）必须
+	// 及时失败进入重连，否则重连线程会永久卡在建立阶段。
+	forwardRequestTimeout = 15 * time.Second
+	// sshHandshakeTimeout SSH 握手超时：ssh.NewClientConn 不读 ClientConfig.Timeout，
+	// 只有 ssh.Dial 才用，必须靠 transport deadline 兜底（否则握手可无限挂起）。
+	sshHandshakeTimeout = 15 * time.Second
+)
+
+// sendForwardRequestWithTimeout 带超时的 wantReply 请求。
+// 超时后调用方会 Close 连接，卡住的 SendRequest 随之解除。
+func sendForwardRequestWithTimeout(client tcpForwardClient, name string, payload []byte, timeout time.Duration) (bool, error) {
+	type result struct {
+		ok  bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ok, _, err := client.SendRequest(name, true, payload)
+		done <- result{ok: ok, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.ok, r.err
+	case <-time.After(timeout):
+		return false, fmt.Errorf("request %q timeout after %v", name, timeout)
+	}
+}
+
 // declareTCPForward 注册 forwarded-tcpip channel 接收并发送 tcpip-forward 端口声明。
 // 服务端明确拒绝（ok=false，例如关闭了 AllowRemoteForward/端口策略不允许）时，
 // 连接虽然存活但没有任何转发能力——必须断线重连，否则客户端会长期"假在线"。
@@ -65,13 +94,13 @@ func declareTCPForward(client tcpForwardClient, remotePort int) (<-chan ssh.NewC
 		return nil, fmt.Errorf("failed to register for forwarded-tcpip channel requests")
 	}
 
-	ok, _, err := client.SendRequest("tcpip-forward", true, ssh.Marshal(&struct {
+	ok, err := sendForwardRequestWithTimeout(client, "tcpip-forward", ssh.Marshal(&struct {
 		Address string
 		Port    uint32
 	}{
 		Address: "0.0.0.0",
 		Port:    uint32(remotePort),
-	}))
+	}), forwardRequestTimeout)
 	if err != nil {
 		logger.Error("Failed to send tcpip-forward request: %v", err)
 		client.Close()
@@ -223,12 +252,16 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 		return fmt.Errorf("failed to dial (%s): %w", transportMode, err)
 	}
 
+	// SSH 握手加 deadline：ClientConfig.Timeout 对 NewClientConn 不生效，
+	// 中间层「接受 TCP 但不转发」时握手会无限挂起，必须靠 deadline 失败重连。
+	_ = transportConn.SetDeadline(time.Now().Add(sshHandshakeTimeout))
 	clientConn, chans, reqs, err := ssh.NewClientConn(transportConn, serverAddr, sshConfig)
 	if err != nil {
 		statsManager.RecordFailure()
 		transportConn.Close()
 		return fmt.Errorf("failed to create SSH client: %w", err)
 	}
+	_ = transportConn.SetDeadline(time.Time{})
 
 	// 【worker】ssh.Client 内存占用分析:
 	// - ssh.Client结构: 约1-5KB (包含连接状态、channel管理等)

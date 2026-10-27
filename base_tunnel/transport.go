@@ -102,10 +102,14 @@ func resetTransportCacheForTest() {
 	})
 }
 
+// TCPDialTimeout TCP 拨号超时：不设超时时 SYN 被中间层静默丢弃会卡到 OS 重试上限
+// （分钟级），worker 重连线程会被挂住，表现为「有心跳但永不重连」。
+const TCPDialTimeout = 10 * time.Second
+
 // dialTCPTransport 现状 TCP 路径（保持一行不动）
 func dialTCPTransport(serverAddr string) (net.Conn, error) {
 	// TCP 层 keepalive：OS 默认探测间隔太长（约 2 小时），显式 30s 尽快发现半开连接
-	dialer := &net.Dialer{KeepAlive: 30 * time.Second}
+	dialer := &net.Dialer{KeepAlive: 30 * time.Second, Timeout: TCPDialTimeout}
 	tcpConn, err := dialer.Dial("tcp", serverAddr)
 	if err != nil {
 		return nil, err
