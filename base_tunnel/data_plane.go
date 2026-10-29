@@ -30,7 +30,11 @@ const (
 	// DataPlaneChannelType 数据面控制通道类型（与节点侧 nwy_node_core_server_go 约定）
 	DataPlaneChannelType = "nwy-data-plane@nssh"
 
-	dataPlaneLocalDialTimeout  = 5 * time.Second
+	// dataPlaneLocalDialTimeout 拨本地服务超时：必须小于服务端 dataPlaneOpenTimeout（3s）。
+	// 若 ≥ 3s，本地服务卡死时服务端会先按 data_stream_timeout 502（误导为客户端失联），
+	// 客户端随后回的真实原因 DATA_ERROR 已无人接收——拨号失败应赶在服务端超时前回告。
+	// 本机/局域网 TCP 拨号正常 <100ms，2s 已足够覆盖慢 NAS 冷盘场景。
+	dataPlaneLocalDialTimeout  = 2 * time.Second
 	dataPlaneStreamOpenTimeout = 5 * time.Second
 	maxDataFrameFieldLen       = 65535
 
