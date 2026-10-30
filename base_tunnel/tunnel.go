@@ -1,12 +1,15 @@
 package base_tunnel
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -423,6 +426,10 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 	heartbeatTicker := time.NewTicker(60 * time.Second)
 	defer heartbeatTicker.Stop()
 
+	// U1/U2 自检状态（单 goroutine 内读写）：Disabled=老服务端禁用；Failures=失败连击
+	udpPingDisabled := false
+	udpPingFailures := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -466,6 +473,108 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 				statsManager.RecordDisconnection()
 				return fmt.Errorf("heartbeat failed after 3 retries")
 			}
+
+			// U1/U2：UDP 数据面自检 + 配置变更检测（见 sendUDPPingWithTimeout）。
+			// 2 连击失败 → 主动断开重连（假在线自愈）；配置变化 → 断开重连拉新快照。
+			if !udpPingDisabled {
+				perr := sendUDPPingWithTimeout(client, config.Proto, 10*time.Second)
+				switch {
+				case perr == nil:
+					udpPingFailures = 0
+				case errors.Is(perr, errUDPPingUnsupported):
+					// 老服务端不认识 udp-ping@nssh：禁用自检，保持原有行为（仅记一次日志）
+					udpPingDisabled = true
+					logger.Info("Server does not support udp-ping, self-check disabled")
+				default:
+					udpPingFailures++
+					logger.Warn("UDP ping failed (%d/2): %v", udpPingFailures, perr)
+					if udpPingFailures >= 2 {
+						logger.Error("UDP ping failed twice, closing connection for reconnect")
+						connCancel()
+						client.Close()
+						transportConn.Close()
+						statsManager.RecordDisconnection()
+						return fmt.Errorf("udp ping failed after %d attempts: %w", udpPingFailures, perr)
+					}
+				}
+			}
 		}
 	}
+}
+
+// ===== UDP 数据面自检（U1）与配置变更检测（U2）=====
+// 服务端协议见 nwy_node_core_server_go/ssh/udp_ping.go，flags 位定义两端保持一致。
+
+const (
+	udpPingRequest  = "udp-ping@nssh"
+	udpPingNonceLen = 16
+	// udpPingReplyLen 回包总长：16B echo nonce + 4B config_version + 1B flags
+	udpPingReplyLen = udpPingNonceLen + 4 + 1
+
+	// 服务端 flags 位（与 ssh/udp_ping.go 对齐）
+	udpFlagSharedEntryHealthy byte = 0x01 // bit0：服务端 UDP 共享入口监听器健康
+	udpFlagConfigChanged      byte = 0x02 // bit1：隧道配置相对登录快照已变化
+	udpFlagConfigUnknown      byte = 0x04 // bit2：配置版本未知（数据端查询失败）
+)
+
+// errUDPPingUnsupported 老服务端不认识 udp-ping@nssh（客户端禁用自检）
+var errUDPPingUnsupported = errors.New("udp-ping not supported by server")
+
+// sendUDPPingWithTimeout 发送 udp-ping@nssh 并校验回显。
+// 返回 nil = 自检通过；errUDPPingUnsupported = 服务端不支持（禁用）；其他错误计入失败连击。
+func sendUDPPingWithTimeout(client *ssh.Client, proto string, timeout time.Duration) error {
+	nonce := make([]byte, udpPingNonceLen)
+	if _, err := rand.Read(nonce); err != nil {
+		return fmt.Errorf("generate nonce: %w", err)
+	}
+
+	reqDone := make(chan error, 1)
+	go func() {
+		ok, resp, err := client.SendRequest(udpPingRequest, true, nonce)
+		if err != nil {
+			reqDone <- err
+			return
+		}
+		if !ok {
+			reqDone <- errUDPPingUnsupported
+			return
+		}
+		reqDone <- parseUDPPingReply(nonce, resp, proto)
+	}()
+
+	select {
+	case err := <-reqDone:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("udp-ping timeout after %v", timeout)
+	}
+}
+
+// parseUDPPingReply 校验 udp-ping 回包（纯函数，可单测）：
+// 长度/nonce 回显/config 变更位/共享入口健康位（仅 udp/both 隧道要求）。
+func parseUDPPingReply(nonce, resp []byte, proto string) error {
+	if len(resp) < udpPingReplyLen {
+		return fmt.Errorf("malformed udp-ping reply: %d bytes", len(resp))
+	}
+	if !bytes.Equal(resp[:udpPingNonceLen], nonce) {
+		return fmt.Errorf("udp-ping nonce mismatch")
+	}
+	flags := resp[udpPingReplyLen-1]
+	// U1 健康位优先：共享入口死是本地事实（与数据端可用性无关），
+	// 数据端故障不应掩盖真实的数据面故障
+	if flags&udpFlagSharedEntryHealthy == 0 {
+		switch strings.TrimSpace(strings.ToLower(proto)) {
+		case "udp", "both":
+			return fmt.Errorf("server shared entry UDP listener unhealthy")
+		}
+	}
+	if flags&udpFlagConfigUnknown != 0 {
+		// 数据端查询失败：配置维度不动作（避免数据端故障引发重连风暴）
+		return nil
+	}
+	if flags&udpFlagConfigChanged != 0 {
+		// U2：登录快照已过期（如 TCP 改双栈），断开重连拉新配置
+		return fmt.Errorf("tunnel config changed (reconnect to apply)")
+	}
+	return nil
 }
