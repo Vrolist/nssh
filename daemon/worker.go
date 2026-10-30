@@ -48,4 +48,7 @@ type WorkerInfo struct {
 	MaxLifetime     int                 `json:"max_lifetime"` // seconds; 0 means disabled
 	LastBytesCheck  int64               `json:"-"`
 	LastCheckTime   time.Time           `json:"-"`
+	// BindRejectStreak 连续端口声明被拒次数（P2 快速退避）：
+	// 仅在 runWorker 主循环内读写（单 goroutine），成功建立隧道后清零
+	BindRejectStreak int `json:"-"`
 }

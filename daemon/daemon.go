@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -16,6 +18,24 @@ import (
 	"github.com/Vrolist/nssh/base_core"
 	"github.com/Vrolist/nssh/base_tunnel"
 )
+
+// bindRejectBackoff P2 端口声明被拒的快速退避序列：3s → 5s → 10s → 30s（回归常态）。
+// 附 0~1s jitter：双活场景两台机器同时快速重试时错开，
+// 配合数据端「更新连接世代优先」仲裁，重连成功的那个直接赢。
+func bindRejectBackoff(streak int) time.Duration {
+	var base time.Duration
+	switch {
+	case streak <= 1:
+		base = 3 * time.Second
+	case streak == 2:
+		base = 5 * time.Second
+	case streak == 3:
+		base = 10 * time.Second
+	default:
+		base = 30 * time.Second
+	}
+	return base + time.Duration(rand.Int63n(int64(time.Second)))
+}
 
 // setupSignals 设置信号处理，在 platform_unix.go 和 platform_windows.go 中实现
 var setupSignals = func() chan os.Signal {
@@ -1117,7 +1137,19 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 		worker.Status = "offline"
 		worker.StatusChangeTime = time.Now()
 
+		// P2：端口声明被拒 = 服务端上旧会话还占着端口，通常秒级~90s 内释放。
+		// 固定 30s 退避会把断开恢复窗口拉长到 1 分钟以上，改用短退避快速探测端口释放；
+		// 连续被拒超 3 次回归常态退避（端口被长期占用，如双活脑裂，交给 supervisor/人工介入）。
 		reconnectDelay := time.Duration(config.ReconnectDelay) * time.Second
+		if errors.Is(err, base_tunnel.ErrForwardRejected) {
+			worker.BindRejectStreak++
+			reconnectDelay = bindRejectBackoff(worker.BindRejectStreak)
+			d.logger.Warn("Worker %s forward request rejected (streak=%d), short backoff %v",
+				worker.Username, worker.BindRejectStreak, reconnectDelay)
+		} else if err == nil {
+			worker.BindRejectStreak = 0 // 隧道成功建立过，重置连击计数
+		}
+
 		d.logger.Info("Worker %s waiting %v before reconnect...", worker.Username, reconnectDelay)
 
 		select {

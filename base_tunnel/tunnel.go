@@ -3,6 +3,7 @@ package base_tunnel
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/Vrolist/nssh/base_core"
 )
+
+// ErrForwardRejected 服务端明确拒绝端口声明（端口被其他会话占用 / 策略不允许 / UDP 未开启）。
+// 断开重连后立即被拒 = 旧会话还占着端口，通常秒级~90s 内释放；
+// daemon 据此用短退避（3s/5s/10s）快速探测端口释放，而不是固定等 30s。
+var ErrForwardRejected = errors.New("forward request rejected by server")
 
 type sshForwardedTcpIP struct {
 	Host           string
@@ -109,7 +115,8 @@ func declareTCPForward(client tcpForwardClient, remotePort int) (<-chan ssh.NewC
 	if !ok {
 		logger.Error("Server rejected tcpip-forward request for remote port %d", remotePort)
 		client.Close()
-		return nil, fmt.Errorf("server rejected tcpip-forward request for remote port %d", remotePort)
+		// 用哨兵错误包装：daemon 重连调度据此走 bind 被拒的短退避（P2），而非固定 30s
+		return nil, fmt.Errorf("%w: tcpip-forward remote port %d", ErrForwardRejected, remotePort)
 	}
 	return requests, nil
 }

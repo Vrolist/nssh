@@ -297,8 +297,9 @@ func setupUDPForward(client *ssh.Client, config *base_core.Config, dc datagramCo
 		return nil, fmt.Errorf("udp-forward request failed: %w", err)
 	}
 	if !ok {
-		// 老服务端 / 服务端 UDP 开关关闭：明确报错，不静默
-		return nil, fmt.Errorf("server rejected udp-forward@nssh (server too old or UDP forwarding disabled)")
+		// 老服务端 / 服务端 UDP 开关关闭：明确报错，不静默。
+		// 哨兵包装：与 tcpip-forward 被拒同语义，daemon 走 bind 被拒短退避（P2）
+		return nil, fmt.Errorf("%w: udp-forward@nssh (server too old or UDP forwarding disabled)", ErrForwardRejected)
 	}
 	if len(resp) < 5 {
 		return nil, fmt.Errorf("malformed udp-forward reply: %d bytes", len(resp))
