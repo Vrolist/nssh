@@ -133,12 +133,14 @@ func quicClientTLS() *tls.Config {
 	}
 }
 
-// dialQUICTransport QUIC 拨号：UDP 握手 → 开单条 stream → 适配为 net.Conn
-func dialQUICTransport(ctx context.Context, serverAddr string, timeout time.Duration) (net.Conn, error) {
+// dialQUICConnection 建立一条 QUIC 连接（不打开 SSH stream）。
+// 数据面隔离（P3）用它另起一条 bulk 连接：SSH 控制报文与大数据流分属不同连接，
+// 连接级流控/拥塞窗口互不挤占。
+func dialQUICConnection(ctx context.Context, serverAddr string, timeout time.Duration) (quic.Connection, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	qconn, err := quic.DialAddr(dialCtx, serverAddr, quicClientTLS(), &quic.Config{
+	return quic.DialAddr(dialCtx, serverAddr, quicClientTLS(), &quic.Config{
 		MaxIdleTimeout:  300 * time.Second,
 		KeepAlivePeriod: QUICKeepAlivePeriod,
 		// EnableDatagrams（RFC9221）：QUIC 传输默认启用不可靠数据报，供 UDP 业务穿透走
@@ -146,6 +148,14 @@ func dialQUICTransport(ctx context.Context, serverAddr string, timeout time.Dura
 		// udp-forward 不置能力位，自动回落 channel 基线（TCP 传输与本开关无关）。
 		EnableDatagrams: true,
 	})
+}
+
+// dialQUICTransport QUIC 拨号：UDP 握手 → 开单条 stream → 适配为 net.Conn
+func dialQUICTransport(ctx context.Context, serverAddr string, timeout time.Duration) (net.Conn, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	qconn, err := dialQUICConnection(ctx, serverAddr, timeout)
 	if err != nil {
 		return nil, err
 	}
