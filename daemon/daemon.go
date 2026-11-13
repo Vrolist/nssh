@@ -37,33 +37,6 @@ func bindRejectBackoff(streak int) time.Duration {
 	return base + time.Duration(rand.Int63n(int64(time.Second)))
 }
 
-// reconnectBackoff J4-C：普通断线的指数退避 + 抖动。
-// base（默认 30s）→ 2× → 4× → …，上限 5min；抖动 0~min(base/2, 30s)，
-// 让同机多隧道/多客户端不会在同一秒一起重连（重连风暴会把刚恢复的入口再次打满）。
-func reconnectBackoff(streak int, base time.Duration) time.Duration {
-	if base <= 0 {
-		base = 30 * time.Second
-	}
-	const maxDelay = 5 * time.Minute
-	const jitterCap = 30 * time.Second
-
-	delay := base
-	for i := 1; i < streak && delay < maxDelay; i++ {
-		delay *= 2
-		if delay > maxDelay {
-			delay = maxDelay
-		}
-	}
-	jitterMax := delay / 2
-	if jitterMax > jitterCap {
-		jitterMax = jitterCap
-	}
-	if jitterMax > 0 {
-		delay += time.Duration(rand.Int63n(int64(jitterMax)))
-	}
-	return delay
-}
-
 // setupSignals 设置信号处理，在 platform_unix.go 和 platform_windows.go 中实现
 var setupSignals = func() chan os.Signal {
 	sigChan := make(chan os.Signal, 1)
@@ -1173,13 +1146,8 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 			reconnectDelay = bindRejectBackoff(worker.BindRejectStreak)
 			d.logger.Warn("Worker %s forward request rejected (streak=%d), short backoff %v",
 				worker.Username, worker.BindRejectStreak, reconnectDelay)
-		} else {
-			if err == nil {
-				worker.BindRejectStreak = 0 // 隧道成功建立过，重置连击计数
-			}
-			// 普通断线：指数退避 + 抖动（连续失败不会固定 30s 节拍，避免重连风暴）
-			worker.ReconnectStreak++
-			reconnectDelay = reconnectBackoff(worker.ReconnectStreak, reconnectDelay)
+		} else if err == nil {
+			worker.BindRejectStreak = 0 // 隧道成功建立过，重置连击计数
 		}
 
 		d.logger.Info("Worker %s waiting %v before reconnect...", worker.Username, reconnectDelay)
@@ -1199,8 +1167,6 @@ func (d *Daemon) runWorker(ctx context.Context, worker *WorkerInfo, config *base
 func markWorkerEstablished(worker *WorkerInfo) {
 	worker.Status = "online"
 	worker.StatusChangeTime = time.Now()
-	// 成功建立即重置重连退避：下一次断线从 base 重新开始
-	worker.ReconnectStreak = 0
 }
 
 // workerHeartbeatTick 仅续期 worker 存活时间戳（主循环据此判断失联），

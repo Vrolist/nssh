@@ -51,7 +51,4 @@ type WorkerInfo struct {
 	// BindRejectStreak 连续端口声明被拒次数（P2 快速退避）：
 	// 仅在 runWorker 主循环内读写（单 goroutine），成功建立隧道后清零
 	BindRejectStreak int `json:"-"`
-	// ReconnectStreak 连续普通断线重连次数（P4-C 指数退避）：
-	// 隧道成功建立过即清零；连续失败按 base×2^n 退避并附抖动，避免固定 30s 同时重连。
-	ReconnectStreak int `json:"-"`
 }

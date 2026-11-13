@@ -198,23 +198,6 @@ func setupTCPForward(client tcpForwardClient, channelHandler *ChannelHandler, co
 	return nil
 }
 
-// openDataPlaneChannel 按偏好打开数据面控制通道：
-//   - preferred>=2 时先试 v2（新节点接受）；
-//   - 失败（老节点 UnknownChannelType）回落 v1；
-//   - v1 也失败说明节点不支持数据面，调用方保持阶段1单 stream。
-func openDataPlaneChannel(client *ssh.Client, preferred int) (ssh.Channel, <-chan *ssh.Request, int, error) {
-	if preferred >= 2 {
-		if ch, reqs, err := client.OpenChannel(DataPlaneChannelTypeV2, nil); err == nil {
-			return ch, reqs, 2, nil
-		}
-	}
-	ch, reqs, err := client.OpenChannel(DataPlaneChannelType, nil)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	return ch, reqs, 1, nil
-}
-
 // sendKeepaliveWithTimeout 发送 keepalive 并带超时保护。
 // TCP 半开（网络静默断开，无 FIN/RST）时 SendRequest 会阻塞在内核重传上长达数分钟，
 // 包一层超时可以让客户端尽快判定断线并进入重连流程，缩短隧道不可用窗口。
@@ -368,18 +351,14 @@ func ConnectAndTunnel(ctx context.Context, config *base_core.Config, statsManage
 	}
 
 	// 数据面（L4-b）：QUIC 传输且未显式关闭时，在 SSH 连接上建立 nwy-data-plane
-	// 控制通道。优先 v2（建流与拨号解耦）；老服务端拒绝 v2 → 回落 v1；v1 也被拒
-	// （老服务端）→ 保留阶段1（单 stream 复用）。
+	// 控制通道。老服务端不认识该 channel type 会直接拒绝 → 保留阶段1（单 stream 复用）。
 	if transportMode == "quic" && dataPlaneEnabled() {
 		if qc, ok := transportConn.(*quicStreamConn); ok {
-			preferred := dataPlanePreferredVersion()
-			ch, reqs, version, err := openDataPlaneChannel(client, preferred)
-			if err == nil {
+			if ch, reqs, err := client.OpenChannel(DataPlaneChannelType, nil); err == nil {
 				go ssh.DiscardRequests(reqs)
-				dp := newTunnelDataPlane(ch, qc.conn, channelHandler, version)
-				dp.serverAddr = serverAddr
+				dp := newTunnelDataPlane(ch, qc.conn, channelHandler)
 				go dp.run(connCtx)
-				logger.Info("QUIC data plane established (per-connection streams, version=%d)", version)
+				logger.Info("QUIC data plane established (per-connection streams)")
 			} else {
 				logger.Debug("QUIC data plane unavailable (%v), using single-stream transport", err)
 			}

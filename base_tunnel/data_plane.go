@@ -2,7 +2,6 @@ package base_tunnel
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -28,15 +27,12 @@ import (
 // 关闭开关：环境变量 NSSH_DATA_PLANE=off。
 
 const (
-	// DataPlaneChannelType 数据面控制通道 v1（与节点侧 nwy_node_core_server_go 约定）
+	// DataPlaneChannelType 数据面控制通道类型（与节点侧 nwy_node_core_server_go 约定）
 	DataPlaneChannelType = "nwy-data-plane@nssh"
-	// DataPlaneChannelTypeV2 数据面控制通道 v2：控制帧到达后先建流、再拨本地服务，
-	// 用数据流首字节回报拨号结果——把 2s 本地拨号从「建流关键路径」上摘掉。
-	DataPlaneChannelTypeV2 = "nwy-data-plane@nssh/v2"
 
-	// dataPlaneLocalDialTimeout 拨本地服务超时：必须小于服务端 dataPlaneOpenTimeout。
-	// 若 ≥ 服务端预算，本地服务卡死时服务端会先按超时 502（误导为客户端失联），
-	// 客户端随后回的真实原因已无人接收——拨号失败应赶在服务端超时前回告。
+	// dataPlaneLocalDialTimeout 拨本地服务超时：必须小于服务端 dataPlaneOpenTimeout（3s）。
+	// 若 ≥ 3s，本地服务卡死时服务端会先按 data_stream_timeout 502（误导为客户端失联），
+	// 客户端随后回的真实原因 DATA_ERROR 已无人接收——拨号失败应赶在服务端超时前回告。
 	// 本机/局域网 TCP 拨号正常 <100ms，2s 已足够覆盖慢 NAS 冷盘场景。
 	dataPlaneLocalDialTimeout  = 2 * time.Second
 	dataPlaneStreamOpenTimeout = 5 * time.Second
@@ -44,17 +40,7 @@ const (
 
 	dataFrameTypeOpen  = byte(1)
 	dataFrameTypeError = byte(2)
-	// dataFrameTypeBindPlane 控制帧：声明 bulk 数据面 plane_id（后续用独立 QUIC 连接承载数据流）
-	dataFrameTypeBindPlane = byte(3)
-
-	// v2 数据流首个字节：1=本地服务已就绪；0=失败，后跟 uint16 长度 + 原因
-	dataStatusOK   = byte(0x01)
-	dataStatusFail = byte(0x00)
 )
-
-// planeBindMagic bulk QUIC 连接首条 stream 的前导魔数：\x00NWP + plane_id(8B)，
-// 与节点侧 dispatchQUICStream 约定一致。
-var planeBindMagic = []byte{0x00, 'N', 'W', 'P'}
 
 var dataStreamMagic = []byte{0x00, 'N', 'W', 'Y'}
 
@@ -71,53 +57,6 @@ func dataPlaneEnabled() bool {
 		return false
 	default:
 		return true
-	}
-}
-
-// dataPlanePreferredVersion 控制通道版本偏好：
-//   - NSSH_DATA_PLANE_VERSION=v1/1 → 只尝试 v1（灰度回退用）
-//   - 其它（含未设置）→ 优先 v2，服务端拒绝时自动回落 v1
-func dataPlanePreferredVersion() int {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("NSSH_DATA_PLANE_VERSION"))) {
-	case "v1", "1":
-		return 1
-	default:
-		return 2
-	}
-}
-
-// encodeDataStatusOK v2 数据流状态：本地服务已就绪
-func encodeDataStatusOK() []byte { return []byte{dataStatusOK} }
-// encodeDataStatusFail v2 数据流状态：本地服务不可用（reason 随状态字节回告）
-func encodeDataStatusFail(reason string) []byte {
-	msg := []byte(reason)
-	if len(msg) > maxDataFrameFieldLen {
-		msg = msg[:maxDataFrameFieldLen]
-	}
-	buf := make([]byte, 3+len(msg))
-	buf[0] = dataStatusFail
-	binary.BigEndian.PutUint16(buf[1:3], uint16(len(msg)))
-	copy(buf[3:], msg)
-	return buf
-}
-
-// encodePlaneBindFrame 控制帧：type=3 + plane_id(8B)
-func encodePlaneBindFrame(planeID uint64) []byte {
-	buf := make([]byte, 9)
-	buf[0] = dataFrameTypeBindPlane
-	binary.BigEndian.PutUint64(buf[1:], planeID)
-	return buf
-}
-
-// dataPlaneIsolationEnabled 灰度开关（默认关闭）：
-// NSSH_DATA_PLANE_ISOLATION=on/1/true 时，数据流走独立 QUIC 连接（bulk），
-// 与 SSH 控制报文（含 DATA_OPEN 帧）分连接隔离，避免大流量挤占连接级流控窗口。
-func dataPlaneIsolationEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("NSSH_DATA_PLANE_ISOLATION"))) {
-	case "on", "1", "true", "yes", "enabled":
-		return true
-	default:
-		return false
 	}
 }
 
@@ -182,110 +121,27 @@ func encodeDataErrorFrame(connID uint64, reason string) []byte {
 
 // tunnelDataPlane 客户端数据面：控制通道 + 所属 QUIC 连接 + 本地转发目标。
 type tunnelDataPlane struct {
-	control    io.ReadWriteCloser
-	qconn      quic.Connection
-	handler    *ChannelHandler
-	localAddr  string
-	version    int
-	serverAddr string
-
-	bulkMu   sync.RWMutex
-	bulkConn quic.Connection
+	control   io.ReadWriteCloser
+	qconn     quic.Connection
+	handler   *ChannelHandler
+	localAddr string
 
 	writeMu   sync.Mutex
 	closeOnce sync.Once
 }
 
-func newTunnelDataPlane(control io.ReadWriteCloser, qconn quic.Connection, handler *ChannelHandler, version ...int) *tunnelDataPlane {
-	v := 1
-	if len(version) > 0 && version[0] > 0 {
-		v = version[0]
-	}
+func newTunnelDataPlane(control io.ReadWriteCloser, qconn quic.Connection, handler *ChannelHandler) *tunnelDataPlane {
 	return &tunnelDataPlane{
 		control:   control,
 		qconn:     qconn,
 		handler:   handler,
 		localAddr: fmt.Sprintf("%s:%d", handler.localHost, handler.localPort),
-		version:   v,
 	}
-}
-
-// dataConnection 当前承载数据流的 QUIC 连接：
-// 隔离模式绑定成功时用 bulk 连接，否则沿用 SSH 所在连接（行为与旧版一致）。
-func (dp *tunnelDataPlane) dataConnection() quic.Connection {
-	dp.bulkMu.RLock()
-	defer dp.bulkMu.RUnlock()
-	if dp.bulkConn != nil {
-		return dp.bulkConn
-	}
-	return dp.qconn
-}
-
-// setupIsolation 建立独立 bulk QUIC 连接（P3）：
-// 先通过控制帧声明 plane_id，再另起一条 QUIC 连接发送 planeBindMagic+plane_id 绑定。
-// 任一步失败都静默回退（数据流继续走 SSH 所在连接），不影响隧道可用性。
-func (dp *tunnelDataPlane) setupIsolation(ctx context.Context) {
-	logger := base_core.GetLogger()
-	if dp.serverAddr == "" {
-		return
-	}
-	var idBuf [8]byte
-	if _, err := cryptorand.Read(idBuf[:]); err != nil {
-		logger.Debug("Data plane isolation: generate plane id failed: %v", err)
-		return
-	}
-	planeID := binary.BigEndian.Uint64(idBuf[:])
-	if planeID == 0 {
-		return
-	}
-	dp.writeMu.Lock()
-	_, err := dp.control.Write(encodePlaneBindFrame(planeID))
-	dp.writeMu.Unlock()
-	if err != nil {
-		logger.Debug("Data plane isolation: send bind frame failed: %v", err)
-		return
-	}
-
-	conn, err := dialQUICConnection(ctx, dp.serverAddr, QUICDialTimeout)
-	if err != nil {
-		logger.Debug("Data plane isolation: dial bulk QUIC failed: %v", err)
-		return
-	}
-	openCtx, cancel := context.WithTimeout(ctx, dataPlaneStreamOpenTimeout)
-	stream, err := conn.OpenStreamSync(openCtx)
-	cancel()
-	if err != nil {
-		_ = conn.CloseWithError(0, "open bind stream failed")
-		logger.Debug("Data plane isolation: open bind stream failed: %v", err)
-		return
-	}
-	header := make([]byte, len(planeBindMagic)+8)
-	copy(header, planeBindMagic)
-	binary.BigEndian.PutUint64(header[len(planeBindMagic):], planeID)
-	if _, err := stream.Write(header); err != nil {
-		_ = conn.CloseWithError(0, "write bind header failed")
-		logger.Debug("Data plane isolation: write bind header failed: %v", err)
-		return
-	}
-
-	dp.bulkMu.Lock()
-	dp.bulkConn = conn
-	dp.bulkMu.Unlock()
-	logger.Info("Data plane isolation enabled (bulk plane=%d)", planeID)
-
-	// 隧道结束时关闭 bulk 连接（绑定流不主动关闭，作为连接存活锚点）
-	go func() {
-		<-ctx.Done()
-		_ = conn.CloseWithError(0, "tunnel closed")
-	}()
 }
 
 // run 读取控制帧（DATA_OPEN）→ 为每条外部连接新开 QUIC stream。
 func (dp *tunnelDataPlane) run(ctx context.Context) {
 	logger := base_core.GetLogger()
-	if dataPlaneIsolationEnabled() {
-		go dp.setupIsolation(ctx)
-	}
 	for {
 		f, err := readDataOpenFrame(dp.control)
 		if err != nil {
@@ -296,62 +152,8 @@ func (dp *tunnelDataPlane) run(ctx context.Context) {
 		if f == nil {
 			continue
 		}
-		if dp.version >= 2 {
-			go dp.openDataStreamV2(ctx, f)
-		} else {
-			go dp.openDataStream(ctx, f)
-		}
+		go dp.openDataStream(ctx, f)
 	}
-}
-
-// openDataStreamV2 v2：先建 QUIC 数据流并写 magic+conn_id，再拨本地服务，
-// 用首字节 0x01/0x00+reason 回报拨号结果。
-//
-// 为什么改顺序：v1 在拨本地服务（最坏 2s）之后才建流，服务端只能干等到超时；
-// 并发首屏时多个 2s 拨号叠加成同一屏障（线上表现为同页资源同时慢 7s）。
-// v2 让建流与拨号并行可感知：服务端拿到流后最多等状态字节，失败也能立刻拿到原因。
-func (dp *tunnelDataPlane) openDataStreamV2(ctx context.Context, f *dataOpenFrame) {
-	logger := base_core.GetLogger()
-
-	streamCtx, cancel := context.WithTimeout(ctx, dataPlaneStreamOpenTimeout)
-	stream, err := dp.dataConnection().OpenStreamSync(streamCtx)
-	cancel()
-	if err != nil {
-		logger.Error("Data plane v2: open data stream failed: %v", err)
-		dp.sendError(f.connID, "open data stream failed: "+err.Error())
-		return
-	}
-
-	header := make([]byte, len(dataStreamMagic)+8)
-	copy(header, dataStreamMagic)
-	binary.BigEndian.PutUint64(header[len(dataStreamMagic):], f.connID)
-	if _, err := stream.Write(header); err != nil {
-		_ = stream.Close()
-		dp.sendError(f.connID, "write data stream header failed: "+err.Error())
-		return
-	}
-
-	localConn, err := net.DialTimeout("tcp", dp.localAddr, dataPlaneLocalDialTimeout)
-	if err != nil {
-		logger.Error("Data plane v2: failed to connect local %s: %v", dp.localAddr, err)
-		_, _ = stream.Write(encodeDataStatusFail("local service unavailable: " + err.Error()))
-		_ = stream.Close()
-		dp.sendError(f.connID, "local service unavailable: "+err.Error())
-		return
-	}
-	if tc, ok := localConn.(*net.TCPConn); ok {
-		tc.SetNoDelay(true)
-	}
-
-	if _, err := stream.Write(encodeDataStatusOK()); err != nil {
-		// 状态字节写不出去说明服务端已放弃该流，直接回收本地连接
-		_ = stream.Close()
-		localConn.Close()
-		dp.sendError(f.connID, "write data stream status failed: "+err.Error())
-		return
-	}
-
-	dp.handler.handleChannel(ctx, &quicDataConn{Stream: stream}, localConn)
 }
 
 // openDataStream 拨本地服务 + 新开 QUIC stream + 双向搬运。
@@ -369,7 +171,7 @@ func (dp *tunnelDataPlane) openDataStream(ctx context.Context, f *dataOpenFrame)
 	}
 
 	streamCtx, cancel := context.WithTimeout(ctx, dataPlaneStreamOpenTimeout)
-	stream, err := dp.dataConnection().OpenStreamSync(streamCtx)
+	stream, err := dp.qconn.OpenStreamSync(streamCtx)
 	cancel()
 	if err != nil {
 		localConn.Close()
