@@ -50,6 +50,7 @@ nssh --log user@server         # 查看隧道日志
 
 ## 安装方式
 
+
 ### 源码编译
 
 ```bash
